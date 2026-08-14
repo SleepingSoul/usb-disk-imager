@@ -1,0 +1,8 @@
+# Only needed when this directory is loaded from disk rather than from the module CMake builds — Qt
+# Design Studio has no build, and without a qmldir a "pragma Singleton" file resolves to a plain
+# component whose properties all read as undefined. Every other type here is found by file name.
+
+module content
+
+singleton Style 1.0 Style.qml
+singleton Icons 1.0 Icons.qml

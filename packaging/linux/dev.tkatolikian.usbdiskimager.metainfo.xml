@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>dev.tkatolikian.usbdiskimager</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+
+  <name>USB Disk Imager</name>
+  <summary>Read USB drives and memory cards into image files and write them back</summary>
+
+  <developer id="dev.tkatolikian">
+    <name>Tihran Katolikian</name>
+  </developer>
+
+  <description>
+    <p>
+      A raw disk imager for USB drives and memory cards. It reads a device into an image file, writes an
+      image file back onto a device, and compares the two byte for byte.
+    </p>
+    <p>
+      A read can stop at the end of the data instead of copying the whole medium: either after the last
+      partition — rebuilding GPT metadata so the shorter image stays valid — or after the last sector that
+      is not entirely zero.
+    </p>
+    <p>
+      Devices are discovered without opening volumes that are not partitions of a physical disk, so
+      virtual volumes from disk-encryption tools are left alone rather than waited on.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">usb-disk-imager.desktop</launchable>
+
+  <url type="homepage">https://github.com/SleepingSoul/usb-disk-imager</url>
+  <url type="bugtracker">https://github.com/SleepingSoul/usb-disk-imager/issues</url>
+
+  <categories>
+    <category>System</category>
+    <category>Utility</category>
+  </categories>
+
+  <content_rating type="oars-1.1"/>
+
+  <releases>
+    <release version="1.0.0" date="2026-08-14">
+      <description>
+        <p>First release.</p>
+      </description>
+    </release>
+  </releases>
+</component>

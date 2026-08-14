@@ -1,0 +1,6 @@
+# Lets members of the "disk" group image removable media without root.
+#
+# Only USB block devices and SD/MMC cards are covered: a rule broad enough to include internal disks
+# would hand the group write access to the running system.
+SUBSYSTEM=="block", SUBSYSTEMS=="usb", ATTRS{removable}=="1", GROUP="disk", MODE="0660"
+SUBSYSTEM=="block", KERNEL=="mmcblk[0-9]*", GROUP="disk", MODE="0660"

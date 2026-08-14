@@ -1,0 +1,13 @@
+# Normalise to LF in the repository and on checkout, so the same sources build the
+# same way on all three target platforms.
+* text=auto eol=lf
+
+# cmd.exe mis-parses a batch file with LF-only line endings: it drops the first
+# character of the following line. These must stay CRLF wherever they are checked out.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+*.png binary
+*.ico binary
+*.qm binary

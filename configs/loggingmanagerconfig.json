@@ -1,0 +1,11 @@
+{
+    "app_logger": {
+        "max_log_file_size_b": 5000000,
+        "max_log_files": 3,
+        "flush_interval_ms": 5000,
+        "prevent_duplicates": true,
+        "duplicates_timeout_ms": 10000,
+        "disabled_logging_categories": ["qt.qml.binding.removal"]
+    },
+    "path": ""
+}

@@ -1,0 +1,6 @@
+{
+    "chunk_size_b": 4194304,
+    "partition_scan_size_b": 1048576,
+    "trim_alignment_b": 1048576,
+    "progress_interval_ms": 100
+}

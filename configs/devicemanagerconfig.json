@@ -1,0 +1,4 @@
+{
+    "refresh_interval_ms": 2000,
+    "include_fixed_disks_by_default": false
+}

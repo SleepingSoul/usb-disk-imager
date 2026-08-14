@@ -1,0 +1,22 @@
+// Generated from buildinfo.hpp.in by CMake into the build tree. Never edit the generated copy.
+#pragma once
+
+#include <QLatin1StringView>
+
+
+namespace UDI::BuildInfo
+{
+constexpr QLatin1StringView ApplicationName{ "@UDI_APP_NAME@" };
+constexpr QLatin1StringView ApplicationId{ "@UDI_APP_ID@" };
+constexpr QLatin1StringView Version{ "@PROJECT_VERSION@" };
+constexpr QLatin1StringView OrganizationName{ "@UDI_ORG_NAME@" };
+constexpr QLatin1StringView OrganizationDomain{ "@UDI_ORG_DOMAIN@" };
+constexpr QLatin1StringView AuthorName{ "@UDI_AUTHOR@" };
+constexpr QLatin1StringView AuthorEmail{ "@UDI_AUTHOR_EMAIL@" };
+constexpr QLatin1StringView CopyrightYear{ "@UDI_COPYRIGHT_YEAR@" };
+constexpr QLatin1StringView Homepage{ "@UDI_HOMEPAGE@" };
+constexpr QLatin1StringView LicenseName{ "@UDI_LICENSE@" };
+
+constexpr QLatin1StringView XxHashVersion{ "@UDI_XXHASH_VERSION@" };
+constexpr QLatin1StringView SpdlogVersion{ "@UDI_SPDLOG_VERSION@" };
+} // namespace UDI::BuildInfo

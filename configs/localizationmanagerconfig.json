@@ -1,0 +1,4 @@
+{
+    "available_languages": ["en", "uk"],
+    "fallback_language": "en"
+}

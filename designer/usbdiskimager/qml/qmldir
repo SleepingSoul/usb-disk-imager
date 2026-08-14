@@ -1,0 +1,6 @@
+module usbdiskimager.qml
+
+singleton App 1.0 App.qml
+singleton Devices 1.0 Devices.qml
+singleton Imager 1.0 Imager.qml
+singleton Localization 1.0 Localization.qml

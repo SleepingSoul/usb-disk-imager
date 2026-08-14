@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=USB Disk Imager
+GenericName=Disk Imager
+Comment=Read USB drives and memory cards into image files and write them back
+Exec=usb-disk-imager
+Icon=usb-disk-imager
+Terminal=false
+Categories=System;Utility;Filesystem;
+Keywords=usb;sd;card;image;img;disk;backup;restore;
+StartupWMClass=usb-disk-imager
