@@ -4,6 +4,7 @@
 #include <cstring>
 
 #include <QCoreApplication>
+#include <QFile>
 #include <QProcess>
 
 #include <fcntl.h>
