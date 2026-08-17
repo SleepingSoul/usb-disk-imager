@@ -216,9 +216,25 @@ std::unique_ptr<RawDevice> RawDevice::open(const DeviceInfo& device, AccessMode 
     {
         flags |= O_EXCL;
     }
+
+    // Bypasses the page cache, matching the class contract above and the FILE_FLAG_NO_BUFFERING side on
+    // Windows; O_DSYNC on the write side makes every write a write to the medium, matching
+    // FILE_FLAG_WRITE_THROUGH there. Without this a multi-gigabyte transfer either evicts the user's
+    // working set or reports itself finished while still draining from RAM to the card.
+    const int directIoFlags = mode == AccessMode::Read ? O_DIRECT : (O_DIRECT | O_DSYNC);
+    flags |= directIoFlags;
 #endif
 
-    const int fileDescriptor = ::open(device.path.constData(), flags);
+    int fileDescriptor = ::open(device.path.constData(), flags);
+
+#if defined(Q_OS_LINUX)
+    if (fileDescriptor < 0 && errno == EINVAL)
+    {
+        qWarning() << "Direct I/O is not supported on" << device.path << "- falling back to buffered I/O";
+        flags &= ~directIoFlags;
+        fileDescriptor = ::open(device.path.constData(), flags);
+    }
+#endif
 
     if (fileDescriptor < 0)
     {
@@ -244,6 +260,15 @@ std::unique_ptr<RawDevice> RawDevice::open(const DeviceInfo& device, AccessMode 
 
         return nullptr;
     }
+
+#if defined(Q_OS_MACOS)
+    // F_NOCACHE is macOS's equivalent of O_DIRECT: applied after open() rather than as an open() flag,
+    // and without O_DIRECT's alignment requirements.
+    if (::fcntl(fileDescriptor, F_NOCACHE, 1) != 0)
+    {
+        qWarning() << "Could not disable the buffer cache for" << device.path << ':' << describeErrno(errno);
+    }
+#endif
 
     const quint64 sizeBytes = queryDeviceSize(fileDescriptor, device.sizeBytes);
     const quint32 sectorSizeBytes = querySectorSize(fileDescriptor, device.logicalSectorSizeBytes);

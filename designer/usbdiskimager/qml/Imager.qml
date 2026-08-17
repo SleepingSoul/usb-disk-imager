@@ -12,6 +12,11 @@ QtObject {
     property string trimMode: "partitions"
     property bool verifyAfterWrite: true
     property bool computeSha256: false
+    property bool skipTrailingZerosOnWrite: false
+    readonly property bool filesystemResizeSupported: true
+    readonly property string filesystemResizeUnsupportedReason: ""
+    property bool shrinkFilesystemAfterRead: false
+    property bool growFilesystemToFillDevice: false
 
     readonly property bool busy: false
     readonly property bool cancelling: false

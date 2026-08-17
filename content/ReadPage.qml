@@ -95,6 +95,17 @@ ScrollView {
                 checked: Imager.computeSha256
                 onToggled: Imager.computeSha256 = checked
             }
+
+            AppCheckBox {
+                Layout.fillWidth: true
+                enabled: !Imager.busy && Imager.filesystemResizeSupported
+                text: qsTr("Shrink the filesystem afterwards")
+                description: Imager.filesystemResizeSupported
+                    ? qsTr("Shrinks the last partition's ext2/3/4 filesystem to the smallest it can be, and truncates the image to match. Useful for a 64 GB card that only needs 8 GB.")
+                    : Imager.filesystemResizeUnsupportedReason
+                checked: Imager.shrinkFilesystemAfterRead
+                onToggled: Imager.shrinkFilesystemAfterRead = checked
+            }
         }
 
         RowLayout {

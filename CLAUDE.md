@@ -30,9 +30,12 @@ Options: `-DUDI_WARNINGS_AS_ERRORS=ON` (on in CI), `-DUDI_USE_SYSTEM_XXHASH=ON`,
 only the current platform's sources are compiled and therefore scanned.
 
 **Platforms**: Windows 11, Ubuntu/Debian x86-64 and macOS. Anything the platforms disagree on lives behind
-one of four headers — `disk/deviceenumerator.hpp`, `disk/rawdevice.hpp`, `disk/volumecontrol.hpp`,
-`utils/privileges.hpp` — implemented once per platform under `src/disk/{windows,linux,macos,unix}/` and
-`src/utils/{windows,unix}/`. Nothing outside those directories may contain a platform `#ifdef`.
+one of five headers — `disk/deviceenumerator.hpp`, `disk/rawdevice.hpp`, `disk/volumecontrol.hpp`,
+`disk/filesystemresizer.hpp`, `utils/privileges.hpp` — implemented once per platform under
+`src/disk/{windows,linux,macos,unix}/` and `src/utils/{windows,unix}/`. Nothing outside those directories
+may contain a platform `#ifdef`. `disk/filesystemresizer.hpp` is Windows' one exception: nothing there
+implements it yet (see docs/filesystem-shrink-grow.md), so `src/disk/windows/filesystemresizer.cpp` is a
+stub that reports itself unsupported rather than a real backend.
 
 ## Architecture
 
@@ -72,6 +75,16 @@ place where a manager method is called across threads. Progress is throttled
 the primary header, the entry-array copy and the secondary header for the shorter image, with fresh
 CRC32s, and the primary header is patched into the first chunk *before* it is hashed and written so the
 reported digest is a digest of the file that was produced.
+
+**Filesystem shrink/grow**: unlike a trim, this changes an actual partition's extent, so
+`PartitionTable::planShrinkLastPartition()`/`planGrowLastPartition()` additionally patch the one entry
+describing it — for GPT that means both copies of the entry array (`GptTrimTrailer::
+patchedPrimaryEntryArray` alongside the copy the trailer already carries) get rewritten with a fresh CRC32,
+not just the header, since an unpatched primary copy fails GPT's own consistency check even though the
+header still parses. `FilesystemResizer` decides the new size by shelling out to e2fsck/resize2fs against
+a loop device (Linux) or an attached image (macOS) — a resize is not cancellable once started, since
+killing e2fsck or resize2fs mid-run risks a half-migrated filesystem, which is worse than waiting. Windows
+has no backend yet; see docs/filesystem-shrink-grow.md.
 
 **QML layer**: `UiManager` registers the C++ singletons imperatively into the `usbdiskimager.qml` module
 (`App`, `Devices`, `Imager`, `Localization`) and loads `qrc:/content/App.qml`. QML files live in their own

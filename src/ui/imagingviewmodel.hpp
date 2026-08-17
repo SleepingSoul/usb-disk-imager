@@ -27,6 +27,14 @@ class ImagingViewModel : public IViewModel
     Q_PROPERTY(QString trimMode READ getTrimMode WRITE setTrimMode NOTIFY optionsChanged FINAL)
     Q_PROPERTY(bool verifyAfterWrite READ getVerifyAfterWrite WRITE setVerifyAfterWrite NOTIFY optionsChanged FINAL)
     Q_PROPERTY(bool computeSha256 READ getComputeSha256 WRITE setComputeSha256 NOTIFY optionsChanged FINAL)
+    Q_PROPERTY(bool skipTrailingZerosOnWrite READ getSkipTrailingZerosOnWrite WRITE setSkipTrailingZerosOnWrite
+        NOTIFY optionsChanged FINAL)
+    Q_PROPERTY(bool filesystemResizeSupported READ getFilesystemResizeSupported CONSTANT)
+    Q_PROPERTY(QString filesystemResizeUnsupportedReason READ getFilesystemResizeUnsupportedReason CONSTANT)
+    Q_PROPERTY(bool shrinkFilesystemAfterRead READ getShrinkFilesystemAfterRead WRITE setShrinkFilesystemAfterRead
+        NOTIFY optionsChanged FINAL)
+    Q_PROPERTY(bool growFilesystemToFillDevice READ getGrowFilesystemToFillDevice WRITE setGrowFilesystemToFillDevice
+        NOTIFY optionsChanged FINAL)
 
     Q_PROPERTY(bool busy READ getBusy NOTIFY stateChanged FINAL)
     Q_PROPERTY(bool cancelling READ getCancelling NOTIFY stateChanged FINAL)
@@ -68,6 +76,14 @@ public:
     void setVerifyAfterWrite(bool verifyAfterWrite);
     bool getComputeSha256() const { return m_computeSha256; }
     void setComputeSha256(bool computeSha256);
+    bool getSkipTrailingZerosOnWrite() const { return m_skipTrailingZerosOnWrite; }
+    void setSkipTrailingZerosOnWrite(bool skipTrailingZerosOnWrite);
+    bool getFilesystemResizeSupported() const { return m_filesystemResizeSupported; }
+    QString getFilesystemResizeUnsupportedReason() const { return m_filesystemResizeUnsupportedReason; }
+    bool getShrinkFilesystemAfterRead() const { return m_shrinkFilesystemAfterRead; }
+    void setShrinkFilesystemAfterRead(bool shrinkFilesystemAfterRead);
+    bool getGrowFilesystemToFillDevice() const { return m_growFilesystemToFillDevice; }
+    void setGrowFilesystemToFillDevice(bool growFilesystemToFillDevice);
 
     bool getBusy() const { return m_busy; }
     bool getCancelling() const { return m_cancelling; }
@@ -128,6 +144,13 @@ private:
     QString m_trimMode;
     bool m_verifyAfterWrite{ true };
     bool m_computeSha256{ false };
+    bool m_skipTrailingZerosOnWrite{ false };
+    bool m_shrinkFilesystemAfterRead{ false };
+    bool m_growFilesystemToFillDevice{ false };
+
+    // e2fsprogs availability does not change while the app is running, so this is resolved once.
+    const bool m_filesystemResizeSupported;
+    const QString m_filesystemResizeUnsupportedReason;
 
     bool m_busy{ false };
     bool m_cancelling{ false };
