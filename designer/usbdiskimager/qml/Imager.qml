@@ -20,6 +20,7 @@ QtObject {
 
     readonly property bool busy: false
     readonly property bool cancelling: false
+    readonly property bool cancellable: true
     readonly property string operation: "write"
 
     readonly property real progressFraction: 0.42

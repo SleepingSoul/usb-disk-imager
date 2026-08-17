@@ -38,6 +38,7 @@ class ImagingViewModel : public IViewModel
 
     Q_PROPERTY(bool busy READ getBusy NOTIFY stateChanged FINAL)
     Q_PROPERTY(bool cancelling READ getCancelling NOTIFY stateChanged FINAL)
+    Q_PROPERTY(bool cancellable READ getCancellable NOTIFY progressChanged FINAL)
     Q_PROPERTY(QString operation READ getOperationToken NOTIFY stateChanged FINAL)
 
     Q_PROPERTY(double progressFraction READ getProgressFraction NOTIFY progressChanged FINAL)
@@ -87,6 +88,9 @@ public:
 
     bool getBusy() const { return m_busy; }
     bool getCancelling() const { return m_cancelling; }
+    // False while a filesystem resize is running: killing e2fsck or resize2fs part-way can leave the
+    // filesystem half migrated, so those stages have to run to completion.
+    bool getCancellable() const;
     QString getOperationToken() const;
 
     double getProgressFraction() const;

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <limits>
 
 #include <QLoggingCategory>
 
@@ -587,6 +588,16 @@ std::optional<TrimPlan> PartitionTable::planMbrResize(const PartitionEntry& targ
 {
     if (m_mbrSector.size() != m_sectorSizeBytes)
     {
+        return std::nullopt;
+    }
+
+    // An MBR entry stores its first sector and length in 32 bits each. Truncating either would describe
+    // a partition unrelated to the filesystem that is about to fill it.
+    if (newSectorCount > std::numeric_limits<quint32>::max()
+        || target.firstSector > std::numeric_limits<quint32>::max())
+    {
+        qWarning() << "An MBR partition cannot describe" << newSectorCount << "sectors at sector"
+                   << target.firstSector << "- leaving the partition table alone";
         return std::nullopt;
     }
 

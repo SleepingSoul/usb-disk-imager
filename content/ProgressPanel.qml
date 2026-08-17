@@ -95,13 +95,25 @@ Card {
     RowLayout {
         Layout.fillWidth: true
 
-        Item { Layout.fillWidth: true }
+        Item {
+            Layout.fillWidth: true
+            visible: Imager.cancellable
+        }
+
+        Text {
+            Layout.fillWidth: true
+            visible: !Imager.cancellable
+            text: qsTr("Resizing a filesystem cannot be interrupted without damaging it.")
+            color: Style.textMuted
+            font.pixelSize: Style.fontSizeSmall
+            wrapMode: Text.WordWrap
+        }
 
         AppButton {
             variant: "secondary"
             text: Imager.cancelling ? qsTr("Cancelling…") : qsTr("Cancel")
             iconPath: Icons.cancel
-            enabled: !Imager.cancelling
+            enabled: Imager.cancellable && !Imager.cancelling
             onClicked: Imager.cancel()
         }
     }

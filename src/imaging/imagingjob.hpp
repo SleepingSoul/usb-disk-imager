@@ -61,6 +61,10 @@ private:
     std::optional<quint64> findLastNonZeroByte(RawDevice& device);
     std::optional<quint64> findLastNonZeroByteInImage(QIODevice& imageFile, quint64 imageSizeBytes);
 
+    // Where the image's last partition ends, which is the earliest a write may stop without leaving
+    // stale device bytes inside a partition. The whole image size when that cannot be established.
+    quint64 findLastPartitionEndInImage(quint64 imageSizeBytes) const;
+
     // Parses whatever of MBR and GPT is in \a head, trying the sector sizes real removable media
     // actually use until one produces a validated GPT or, failing that, an MBR at the default of 512 —
     // there is no live device here to just ask, the way resolveTrimPlan() can.

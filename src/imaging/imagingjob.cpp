@@ -318,6 +318,12 @@ ImagingResult ImagingJob::runWrite()
     {
         reportProgress(ImagingStage::Analyzing, 0, imageSizeBytes, true);
 
+        // Only the tail past the last partition may be left showing the device's previous contents. A
+        // zero run *inside* a partition is part of the filesystem — unallocated blocks read as zeros —
+        // and skipping that would leave stale bytes where the image says zeros, so the written
+        // filesystem would no longer match the image.
+        const quint64 lastPartitionEndBytes = findLastPartitionEndInImage(imageSizeBytes);
+
         const auto lastNonZeroByte = findLastNonZeroByteInImage(imageFile, imageSizeBytes);
 
         if (isCancelled())
@@ -325,9 +331,13 @@ ImagingResult ImagingJob::runWrite()
             return makeResult(ImagingStage::Cancelled, QString{});
         }
 
-        writeSizeBytes = lastNonZeroByte
+        // No value means the scan itself failed rather than that the image is empty; writing all of it
+        // is the only safe reading of that.
+        const quint64 lastDataEndBytes = lastNonZeroByte
             ? std::min(roundUpTo(*lastNonZeroByte + 1, sectorSizeBytes), imageSizeBytes)
-            : 0;
+            : imageSizeBytes;
+
+        writeSizeBytes = std::max(lastDataEndBytes, lastPartitionEndBytes);
 
         if (writeSizeBytes < imageSizeBytes)
         {
@@ -678,6 +688,36 @@ std::optional<quint64> ImagingJob::findLastNonZeroByteInImage(QIODevice& imageFi
     return 0;
 }
 
+quint64 ImagingJob::findLastPartitionEndInImage(quint64 imageSizeBytes) const
+{
+    std::vector<std::uint8_t> head;
+    QString errorMessage;
+
+    // Every failure below returns the whole image, which disables skipping rather than risking it
+    // against a layout that could not be established.
+    if (!readImageHead(imageSizeBytes, head, errorMessage))
+    {
+        qWarning() << "Could not read the partition table of" << m_request.imageFilePath << ':'
+                   << errorMessage << "- writing the whole image";
+        return imageSizeBytes;
+    }
+
+    const PartitionTable table = parseImagePartitionTable(head, imageSizeBytes);
+    const PartitionEntry* const lastPartition = table.getLastPartition();
+
+    if (!lastPartition)
+    {
+        qInfo() << "No partition table in" << m_request.imageFilePath
+                << "- writing the whole image rather than guessing where its data ends";
+        return imageSizeBytes;
+    }
+
+    const quint64 lastPartitionEndBytes =
+        (lastPartition->firstSector + lastPartition->sectorCount) * table.getSectorSizeBytes();
+
+    return std::min(lastPartitionEndBytes, imageSizeBytes);
+}
+
 PartitionTable ImagingJob::parseImagePartitionTable(const std::vector<std::uint8_t>& head, quint64 imageSizeBytes) const
 {
     for (const quint32 candidateSectorSizeBytes : CandidateSectorSizesBytes)
@@ -885,7 +925,10 @@ bool ImagingJob::shrinkImageFilesystem(QString& errorMessage)
     if (shrinkResult->newPartitionSectorCount >= lastPartition->sectorCount)
     {
         qInfo() << "resize2fs could not shrink the filesystem in" << m_request.imageFilePath << "any further";
-        return true;
+
+        // The e2fsck run inside shrinkFilesystem() may still have repaired the filesystem, so the digest
+        // taken during the read can describe a file that no longer exists on disk.
+        return computeFileDigests(errorMessage);
     }
 
     const auto plan = table.planShrinkLastPartition(shrinkResult->newPartitionSectorCount);

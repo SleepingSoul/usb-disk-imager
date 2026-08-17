@@ -40,7 +40,15 @@ and it's the pattern this codebase already uses (`VolumeControl` on Linux shells
 `libext2fs` via `FetchContent` the way xxHash and spdlog are vendored — that route is closed by the license,
 not by engineering difficulty.
 
-Decision: shell out to bundled `resize2fs`/`e2fsck` binaries, never link against `libext2fs`.
+Decision: shell out to `resize2fs`/`e2fsck` as separate processes, never link against `libext2fs`.
+
+As implemented, those are the *separately installed* system tools, not binaries this project ships: the
+Linux backend resolves them on `PATH` (e2fsprogs is effectively always present there), and the macOS
+backend checks `PATH` plus Homebrew's keg-only install prefixes. Nothing is bundled today, and both
+backends report themselves unsupported — greying the option out with an install hint rather than failing
+mid-run — when the tools are missing. Bundling them, which the packaging section below describes, is still
+the right move before shipping to macOS users who cannot be assumed to have Homebrew, but it is future
+work rather than something this implementation relies on.
 
 ## The actual hard problem: exposing "partition N of this .img" to the tool
 
@@ -193,13 +201,15 @@ re-parsing.
 
 ### Grow, and whether it's even needed
 
-Growing back after writing to a bigger card is the easy direction — `resize2fs` with no target size fills
-whatever partition currently contains it. But most stock Raspberry Pi OS images already auto-expand the
-root filesystem on first boot for exactly this reason: PiShrink-style shrinking is designed to be paired
-with that auto-expand, not with the imaging tool doing the growing itself. Recommend keeping "grow after
-write" as an *optional* toggle rather than automatic — useful for images that don't auto-expand, or for
-someone who wants a fully-ready card without a first-boot resize/reboot cycle, but not needed for a stock
-Pi OS image.
+Growing to fill a bigger card is the easy direction — `resize2fs` with no target size fills whatever
+partition currently contains it. But most stock Raspberry Pi OS images already auto-expand the root
+filesystem on first boot for exactly this reason: PiShrink-style shrinking is designed to be paired with
+that auto-expand, not with the imaging tool doing the growing itself. So this stayed an *optional* toggle
+rather than automatic — useful for images that don't auto-expand, or for someone who wants a fully-ready
+card without a first-boot resize/reboot cycle, but not needed for a stock Pi OS image.
+
+The toggle grows the image *before* the write rather than the device after it — see "Implemented shape"
+above for why the device-side ordering this section originally assumed does not work here.
 
 ### Packaging impact
 

@@ -201,6 +201,12 @@ void ImagingViewModel::setGrowFilesystemToFillDevice(bool growFilesystemToFillDe
     Q_EMIT optionsChanged();
 }
 
+bool ImagingViewModel::getCancellable() const
+{
+    return m_progress.stage != ImagingStage::ShrinkingFilesystem
+        && m_progress.stage != ImagingStage::GrowingFilesystem;
+}
+
 QString ImagingViewModel::getOperationToken() const
 {
     switch (m_operation)
@@ -374,6 +380,14 @@ void ImagingViewModel::cancel()
 {
     if (!m_busy)
     {
+        return;
+    }
+
+    // The button is disabled for these stages, but a click that lands as one begins would otherwise
+    // leave the UI showing "Cancelling…" for a run that is going to report success regardless.
+    if (!getCancellable())
+    {
+        qInfo() << "Ignoring a cancel request during a filesystem resize";
         return;
     }
 

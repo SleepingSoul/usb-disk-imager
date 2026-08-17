@@ -10,9 +10,14 @@ using namespace Qt::Literals::StringLiterals;
 
 namespace
 {
-// resize2fs on a large, nearly-full filesystem can legitimately take minutes; this only has to be long
-// enough to tell a stalled tool from a slow one.
-constexpr int ProcessTimeoutMilliseconds = 15 * 60 * 1000;
+// losetup and dumpe2fs only attach or inspect, so killing one cannot damage a filesystem; this only has
+// to be long enough to tell a stalled tool from a slow one.
+constexpr int SetupToolTimeoutMilliseconds = 60000;
+
+// e2fsck and resize2fs rewrite the filesystem in place, and killing one part-way can leave it half
+// migrated — far worse than any wait. They are waited on without a deadline, however long a large or
+// slow medium takes, which is also why a resize is not cancellable once started.
+constexpr int NoTimeoutMilliseconds = -1;
 
 const QLatin1StringView LosetupExecutable{ "losetup" };
 const QLatin1StringView E2fsckExecutable{ "e2fsck" };
@@ -29,14 +34,19 @@ bool allToolsFound()
 
 // Runs \a executable to completion and reports whether it finished within \a maxAcceptableExitCode,
 // merging stdout and stderr into \a output for use in an error message. e2fsck's "errors were corrected"
-// exit code of 1 is the only place a caller passes anything other than 0.
-bool runTool(const QLatin1StringView& executable, const QStringList& arguments, int maxAcceptableExitCode, QString& output)
+// exit code of 1 is the only place a caller passes anything other than 0. \a timeoutMilliseconds is
+// NoTimeoutMilliseconds for the tools that must never be killed.
+bool runTool(const QLatin1StringView& executable,
+    const QStringList& arguments,
+    int timeoutMilliseconds,
+    int maxAcceptableExitCode,
+    QString& output)
 {
     QProcess process;
     process.setProcessChannelMode(QProcess::MergedChannels);
     process.start(executable, arguments);
 
-    if (!process.waitForFinished(ProcessTimeoutMilliseconds))
+    if (!process.waitForFinished(timeoutMilliseconds))
     {
         process.kill();
         output = QCoreApplication::translate("FilesystemResizer", "%1 did not finish in time.").arg(executable);
@@ -58,11 +68,8 @@ public:
 
     ~LoopDeviceGuard()
     {
-        if (!m_devicePath.isEmpty())
-        {
-            QString output;
-            runTool(LosetupExecutable, QStringList{ QStringLiteral("-d"), m_devicePath }, 0, output);
-        }
+        QString ignoredErrorMessage;
+        detach(ignoredErrorMessage);
     }
 
     bool attach(const QString& path, quint64 offsetBytes, quint64 sizeBytes, QString& errorMessage)
@@ -74,7 +81,7 @@ public:
             QStringLiteral("--sizelimit"), QString::number(sizeBytes),
             path });
 
-        if (!process.waitForFinished(ProcessTimeoutMilliseconds))
+        if (!process.waitForFinished(SetupToolTimeoutMilliseconds))
         {
             process.kill();
             errorMessage = QCoreApplication::translate("FilesystemResizer", "losetup did not finish in time.");
@@ -99,6 +106,30 @@ public:
         return true;
     }
 
+    // A checked step rather than only a destructor side effect: the caller rewrites and truncates the
+    // backing file once this returns, which must not happen while the mapping onto it is still live.
+    bool detach(QString& errorMessage)
+    {
+        if (m_devicePath.isEmpty())
+        {
+            return true;
+        }
+
+        QString output;
+
+        if (!runTool(LosetupExecutable, QStringList{ QStringLiteral("-d"), m_devicePath },
+                SetupToolTimeoutMilliseconds, 0, output))
+        {
+            errorMessage = QCoreApplication::translate("FilesystemResizer",
+                "Could not detach the loop device %1: %2").arg(m_devicePath, output);
+            return false;
+        }
+
+        m_devicePath.clear();
+
+        return true;
+    }
+
     const QString& devicePath() const { return m_devicePath; }
 
 private:
@@ -110,7 +141,8 @@ bool checkFilesystem(const QString& devicePath, QString& errorMessage)
 {
     QString output;
 
-    if (!runTool(E2fsckExecutable, QStringList{ QStringLiteral("-f"), QStringLiteral("-y"), devicePath }, 1, output))
+    if (!runTool(E2fsckExecutable, QStringList{ QStringLiteral("-f"), QStringLiteral("-y"), devicePath },
+            NoTimeoutMilliseconds, 1, output))
     {
         errorMessage = QCoreApplication::translate("FilesystemResizer",
             "The filesystem check before resizing failed: %1").arg(output);
@@ -125,7 +157,7 @@ std::optional<quint64> readBlockCount(const QString& devicePath, quint32& blockS
     QProcess process;
     process.start(Dumpe2fsExecutable, QStringList{ QStringLiteral("-h"), devicePath });
 
-    if (!process.waitForFinished(ProcessTimeoutMilliseconds))
+    if (!process.waitForFinished(SetupToolTimeoutMilliseconds))
     {
         process.kill();
         errorMessage = QCoreApplication::translate("FilesystemResizer", "dumpe2fs did not finish in time.");
@@ -209,7 +241,8 @@ std::optional<FilesystemResizer::ShrinkResult> FilesystemResizer::shrinkFilesyst
 
     QString resizeOutput;
 
-    if (!runTool(Resize2fsExecutable, QStringList{ QStringLiteral("-M"), loopDevice.devicePath() }, 0, resizeOutput))
+    if (!runTool(Resize2fsExecutable, QStringList{ QStringLiteral("-M"), loopDevice.devicePath() },
+            NoTimeoutMilliseconds, 0, resizeOutput))
     {
         errorMessage = tr("resize2fs could not shrink the filesystem: %1").arg(resizeOutput);
         return std::nullopt;
@@ -219,6 +252,11 @@ std::optional<FilesystemResizer::ShrinkResult> FilesystemResizer::shrinkFilesyst
     const auto blockCount = readBlockCount(loopDevice.devicePath(), blockSizeBytes, errorMessage);
 
     if (!blockCount)
+    {
+        return std::nullopt;
+    }
+
+    if (!loopDevice.detach(errorMessage))
     {
         return std::nullopt;
     }
@@ -259,12 +297,13 @@ bool FilesystemResizer::growFilesystem(const QString& path,
     QString resizeOutput;
 
     // No target size: resize2fs fills whatever the loop device's --sizelimit already made available.
-    if (!runTool(Resize2fsExecutable, QStringList{ loopDevice.devicePath() }, 0, resizeOutput))
+    if (!runTool(Resize2fsExecutable, QStringList{ loopDevice.devicePath() },
+            NoTimeoutMilliseconds, 0, resizeOutput))
     {
         errorMessage = tr("resize2fs could not grow the filesystem: %1").arg(resizeOutput);
         return false;
     }
 
-    return true;
+    return loopDevice.detach(errorMessage);
 }
 } // namespace UDI
