@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <deque>
 #include <functional>
 #include <memory>
 
@@ -23,6 +24,9 @@ struct ImagingJobSettings
     // Trimmed MBR images are rounded up to this, so a following partition tool has room to align.
     quint64 trimAlignmentBytes{ 1024u * 1024u };
     int progressIntervalMilliseconds{ 100 };
+    // How much recent history the transfer rate is averaged over. Long enough to cover a card's
+    // burst-then-flush cycle, short enough to follow a medium that genuinely changes pace.
+    int speedWindowMilliseconds{ 5000 };
 };
 
 /*
@@ -95,11 +99,23 @@ private:
         QString& errorMessage);
 
     void reportProgress(ImagingStage stage, quint64 processedBytes, quint64 totalBytes, bool force);
+
+    // Folds one progress reading into the trailing window the reported rate is averaged over.
+    void updateSpeedEstimate(ImagingStage stage, quint64 processedBytes, qint64 nowMilliseconds);
+
     bool isCancelled() const { return m_cancelRequested.load(std::memory_order_relaxed); }
 
     ImagingResult makeResult(ImagingStage stage, QString errorMessage) const;
 
     quint64 alignedChunkSize(quint32 sectorSizeBytes) const;
+
+    // One progress reading. The rate is derived from the span between the ends of a window of these
+    // rather than from consecutive pairs, so a single stalled or bursting interval cannot move it far.
+    struct SpeedSample
+    {
+        qint64 elapsedMilliseconds{ 0 };
+        quint64 processedBytes{ 0 };
+    };
 
     ImagingRequest m_request;
     ImagingJobSettings m_settings;
@@ -108,8 +124,9 @@ private:
 
     QElapsedTimer m_runTimer;
     qint64 m_lastProgressReportMs{ 0 };
-    quint64 m_lastProgressProcessedBytes{ 0 };
-    double m_smoothedBytesPerSecond{ 0.0 };
+    std::deque<SpeedSample> m_speedSamples;
+    ImagingStage m_speedSampleStage{ ImagingStage::Idle };
+    double m_averageBytesPerSecond{ 0.0 };
 
     quint64 m_processedBytes{ 0 };
     QByteArray m_fastDigestHex;

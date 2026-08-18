@@ -314,13 +314,17 @@ std::optional<quint64> readFilesystemSizeBytes(const QString& devicePath, QStrin
 }
 } // namespace
 
-bool FilesystemResizer::isSupported()
+bool FilesystemResizer::isSupported(Operation operation)
 {
+    Q_UNUSED(operation)
+
     return allToolsFound();
 }
 
-QString FilesystemResizer::getUnsupportedReason()
+QString FilesystemResizer::getUnsupportedReason(Operation operation)
 {
+    Q_UNUSED(operation)
+
     return allToolsFound()
         ? QString{}
         : tr("Needs e2fsprogs — install it with Homebrew: brew install e2fsprogs");
@@ -332,11 +336,13 @@ std::optional<FilesystemResizer::ShrinkResult> FilesystemResizer::shrinkFilesyst
     quint32 sectorSizeBytes,
     QString& errorMessage)
 {
+    const Operation operation = Operation::Shrink;
+
     Q_UNUSED(partitionStartSector)
 
     if (!allToolsFound())
     {
-        errorMessage = getUnsupportedReason();
+        errorMessage = getUnsupportedReason(operation);
         return std::nullopt;
     }
 
@@ -382,11 +388,13 @@ bool FilesystemResizer::growFilesystem(const QString& path,
     quint32 sectorSizeBytes,
     QString& errorMessage)
 {
+    const Operation operation = Operation::Grow;
+
     Q_UNUSED(partitionStartSector)
 
     if (!allToolsFound())
     {
-        errorMessage = getUnsupportedReason();
+        errorMessage = getUnsupportedReason(operation);
         return false;
     }
 

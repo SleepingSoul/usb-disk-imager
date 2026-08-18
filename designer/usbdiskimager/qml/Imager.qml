@@ -2,7 +2,8 @@ pragma Singleton
 import QtQuick
 
 // Design-time stand-in for UDI::ImagingViewModel. busy and hasResult are the two switches worth flipping:
-// they reveal ProgressPanel.qml and ResultPanel.qml, on whichever page operation names.
+// busy raises the modal ProgressDialog.qml over everything; hasResult reveals ResultPanel.qml on
+// whichever page operation names.
 QtObject {
     property string imageFilePath: "C:/Images/raspios-bookworm-armhf.img"
     readonly property string imageFileName: "raspios-bookworm-armhf.img"
@@ -13,8 +14,10 @@ QtObject {
     property bool verifyAfterWrite: true
     property bool computeSha256: false
     property bool skipTrailingZerosOnWrite: false
-    readonly property bool filesystemResizeSupported: true
-    readonly property string filesystemResizeUnsupportedReason: ""
+    readonly property bool shrinkSupported: true
+    readonly property string shrinkUnsupportedReason: ""
+    readonly property bool growSupported: true
+    readonly property string growUnsupportedReason: ""
     property bool shrinkFilesystemAfterRead: false
     property bool growFilesystemToFillDevice: false
 

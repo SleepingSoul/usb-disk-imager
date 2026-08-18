@@ -22,7 +22,11 @@ namespace
 // expects a megabyte of slack all live in the first sectors.
 constexpr quint64 MinimumTrimmedImageBytes = 1024u * 1024u;
 
-constexpr double SpeedSmoothingFactor = 0.3;
+// A rate taken from one progress interval swings between the two halves of a card's own write cycle —
+// a burst into its cache, then a stall while it flushes — hard enough to make the remaining-time
+// estimate unreadable. Averaging across a window of readings rides over both. This is the shortest
+// span worth dividing by, before which no estimate is published at all.
+constexpr qint64 MinimumSpeedSpanMilliseconds = 250;
 
 // Real removable media report one of these two as their logical sector size. GPT's checksum lets each
 // be tried in turn and trusted only once it actually validates; MBR has no such check, so the fallback
@@ -1102,38 +1106,61 @@ void ImagingJob::reportProgress(ImagingStage stage, quint64 processedBytes, quin
         return;
     }
 
-    const qint64 intervalMilliseconds = nowMilliseconds - m_lastProgressReportMs;
-
-    if (intervalMilliseconds > 0 && processedBytes >= m_lastProgressProcessedBytes)
-    {
-        const double instantBytesPerSecond =
-            static_cast<double>(processedBytes - m_lastProgressProcessedBytes) * 1000.0
-            / static_cast<double>(intervalMilliseconds);
-
-        // A raw per-interval rate swings wildly with the device's own write caching, which makes the
-        // remaining-time estimate jump around; smoothing it keeps both readable.
-        m_smoothedBytesPerSecond = m_smoothedBytesPerSecond > 0.0
-            ? (1.0 - SpeedSmoothingFactor) * m_smoothedBytesPerSecond + SpeedSmoothingFactor * instantBytesPerSecond
-            : instantBytesPerSecond;
-    }
-
     m_lastProgressReportMs = nowMilliseconds;
-    m_lastProgressProcessedBytes = processedBytes;
+
+    updateSpeedEstimate(stage, processedBytes, nowMilliseconds);
 
     ImagingProgress progress;
     progress.stage = stage;
     progress.processedBytes = processedBytes;
     progress.totalBytes = totalBytes;
-    progress.bytesPerSecond = m_smoothedBytesPerSecond;
+    progress.bytesPerSecond = m_averageBytesPerSecond;
     progress.elapsedMilliseconds = nowMilliseconds;
-    progress.remainingMilliseconds = (m_smoothedBytesPerSecond > 1.0 && totalBytes > processedBytes)
-        ? static_cast<qint64>(static_cast<double>(totalBytes - processedBytes) / m_smoothedBytesPerSecond * 1000.0)
+    progress.remainingMilliseconds = (m_averageBytesPerSecond > 1.0 && totalBytes > processedBytes)
+        ? static_cast<qint64>(static_cast<double>(totalBytes - processedBytes) / m_averageBytesPerSecond * 1000.0)
         : -1;
 
     if (m_progressCallback)
     {
         m_progressCallback(progress);
     }
+}
+
+void ImagingJob::updateSpeedEstimate(ImagingStage stage, quint64 processedBytes, qint64 nowMilliseconds)
+{
+    // Every stage counts its own bytes from zero, so a window must never span two of them. The rate
+    // carried over from the previous stage stands until the new one has enough history of its own,
+    // which keeps the figure from dropping to zero for a moment at every stage boundary.
+    if (stage != m_speedSampleStage
+        || (!m_speedSamples.empty() && processedBytes < m_speedSamples.back().processedBytes))
+    {
+        m_speedSamples.clear();
+        m_speedSampleStage = stage;
+    }
+
+    m_speedSamples.push_back(SpeedSample{ nowMilliseconds, processedBytes });
+
+    const qint64 windowMilliseconds = std::max(m_settings.speedWindowMilliseconds, 1);
+
+    // Two samples are the fewest a rate can be derived from, so that many are kept however long the
+    // medium stalls — otherwise a stall longer than the window would leave nothing to divide by.
+    while (m_speedSamples.size() > 2
+        && nowMilliseconds - m_speedSamples.front().elapsedMilliseconds > windowMilliseconds)
+    {
+        m_speedSamples.pop_front();
+    }
+
+    const SpeedSample& oldest = m_speedSamples.front();
+    const qint64 spanMilliseconds = nowMilliseconds - oldest.elapsedMilliseconds;
+
+    // Too little history to divide by yet; whatever was last reported still stands.
+    if (spanMilliseconds < MinimumSpeedSpanMilliseconds)
+    {
+        return;
+    }
+
+    m_averageBytesPerSecond = static_cast<double>(processedBytes - oldest.processedBytes) * 1000.0
+        / static_cast<double>(spanMilliseconds);
 }
 
 ImagingResult ImagingJob::makeResult(ImagingStage stage, QString errorMessage) const

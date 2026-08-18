@@ -48,8 +48,10 @@ QString sanitizeForFileName(const QString& text)
 
 ImagingViewModel::ImagingViewModel(DeviceListModel* deviceListModel)
     : m_deviceListModel(deviceListModel)
-    , m_filesystemResizeSupported(FilesystemResizer::isSupported())
-    , m_filesystemResizeUnsupportedReason(FilesystemResizer::getUnsupportedReason())
+    , m_shrinkSupported(FilesystemResizer::isSupported(FilesystemResizer::Operation::Shrink))
+    , m_shrinkUnsupportedReason(FilesystemResizer::getUnsupportedReason(FilesystemResizer::Operation::Shrink))
+    , m_growSupported(FilesystemResizer::isSupported(FilesystemResizer::Operation::Grow))
+    , m_growUnsupportedReason(FilesystemResizer::getUnsupportedReason(FilesystemResizer::Operation::Grow))
 {}
 
 void ImagingViewModel::resetToDefault()
@@ -60,8 +62,8 @@ void ImagingViewModel::resetToDefault()
     m_verifyAfterWrite = UserSettings::getVerifyAfterWrite();
     m_computeSha256 = UserSettings::getComputeSha256();
     m_skipTrailingZerosOnWrite = UserSettings::getSkipTrailingZerosOnWrite();
-    m_shrinkFilesystemAfterRead = m_filesystemResizeSupported && UserSettings::getShrinkFilesystemAfterRead();
-    m_growFilesystemToFillDevice = m_filesystemResizeSupported && UserSettings::getGrowFilesystemToFillDevice();
+    m_shrinkFilesystemAfterRead = m_shrinkSupported && UserSettings::getShrinkFilesystemAfterRead();
+    m_growFilesystemToFillDevice = m_growSupported && UserSettings::getGrowFilesystemToFillDevice();
 
     m_busy = false;
     m_cancelling = false;
@@ -501,8 +503,8 @@ void ImagingViewModel::startOperation(ImagingOperation operation)
     request.verifyAfterWrite = m_verifyAfterWrite;
     request.computeSha256 = m_computeSha256;
     request.skipTrailingZerosOnWrite = m_skipTrailingZerosOnWrite;
-    request.shrinkFilesystemAfterRead = m_filesystemResizeSupported && m_shrinkFilesystemAfterRead;
-    request.growFilesystemToFillDevice = m_filesystemResizeSupported && m_growFilesystemToFillDevice;
+    request.shrinkFilesystemAfterRead = m_shrinkSupported && m_shrinkFilesystemAfterRead;
+    request.growFilesystemToFillDevice = m_growSupported && m_growFilesystemToFillDevice;
 
     m_hasResult = false;
     m_result = ImagingResult{};

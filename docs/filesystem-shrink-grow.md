@@ -9,10 +9,10 @@ does on Linux; the ask here is to make it work from this app on Windows, Linux a
 **Status**: implemented and tested on Linux (both MBR and GPT, shrink and grow, verified end to end with
 real `mkfs.ext4`/`sgdisk`/`e2fsck`/mount round-trips — see "How this was tested" below). Implemented on
 macOS per the plan below but **not tested on real hardware** — there is no Mac available in the
-environment this was built in; treat it as best-effort until someone verifies it on an actual Mac. Windows
-is a stub that reports itself unsupported, with the Read/Write page options greyed out and an explanation
-shown, exactly per the "grayed out with explanation" request — no WSL2 or copy-splice path is implemented
-yet, only the design below.
+environment this was built in; treat it as best-effort until someone verifies it on an actual Mac.
+**Shrink** is also implemented on Windows, through WSL, when WSL and e2fsprogs are present; it is likewise
+untested, for the same reason. **Grow** remains unavailable on Windows and its option stays greyed out
+with an explanation. See "Windows, through WSL" below.
 
 ## This is not the same problem as trimming trailing zeros
 
@@ -60,7 +60,7 @@ platforms genuinely diverge:
 |---|---|---|
 | Linux | `losetup -o <offset> --sizelimit <size> /dev/loopN` | Zero-copy — the loop device maps directly onto the underlying file's bytes. This is what PiShrink itself uses. e2fsprogs is virtually always already installed. |
 | macOS | `hdiutil attach -nomount` on the whole image | macOS parses the image's own partition map and exposes each partition as its own `/dev/diskNsM` node, without root. Needs bundled static `resize2fs`/`e2fsck` binaries since macOS ships none. |
-| Windows | No equivalent primitive | Nothing in the platform exposes "byte range of a file" as a device node without a third-party driver (which is its own risk: kernel driver signing, install-time prompts). Fallback: copy the partition's byte range out to a temp file, run the tools against that standalone file, splice the shrunk result back into the image, rewrite the partition table entry, truncate. Needs bundled Windows binaries too. |
+| Windows | No equivalent primitive — copy the partition out instead | Nothing in the platform exposes "byte range of a file" as a device node without a third-party driver (which is its own risk: kernel driver signing, install-time prompts). So: copy the partition's byte range out to a temp file, run the tools against that standalone file, copy the shrunk result back, rewrite the partition table entry, truncate. This is what is implemented, with WSL hosting the tools. |
 
 The Windows fallback costs extra scratch-disk I/O (a copy-out of the *pre-shrink* partition size, which
 could be tens of GB) and temporary disk space that Linux/macOS avoid via zero-copy loop/attach access. It
@@ -88,12 +88,18 @@ picking a hypervisor per platform (WHPX/Hyper-V on Windows, `Virtualization.fram
 Linux, where it's redundant anyway), and maintaining all of it — closer to building a small Docker
 Desktop than to shipping a disk-imaging feature.
 
-One targeted exception: **WSL2 on Windows**. Unlike Docker, it's a Microsoft-native feature many Windows
-installs already have enabled, not a separate multi-GB download. Where present, the Windows backend can
-shell out to `wsl.exe` to run `losetup`/`resize2fs`/`e2fsck` against the Windows-side file (reachable from
-WSL2 under `/mnt/c/...`), getting the same zero-copy loop-device semantics as native Linux instead of the
-copy-out/splice-back fallback. Falls back to that copy-splice path when WSL2 isn't installed. macOS has no
-equivalent already-there primitive, so it doesn't get an analogous shortcut.
+One targeted exception: **WSL on Windows**, which is what the Windows backend now uses. Unlike Docker,
+it's a Microsoft-native feature many Windows installs already have enabled, not a separate multi-GB
+download, and its default distribution ships e2fsprogs outright — no image to pull, no daemon, no network.
+
+Docker was considered as a second option and deliberately left out. Docker Desktop for Windows runs *on*
+WSL2 in its default configuration, so a machine with Docker almost always already has WSL — supporting WSL
+covers nearly every machine Docker would have. On top of that Docker needs a running daemon and an image
+that actually contains e2fsprogs, which means a network pull on first use. It is strictly more moving parts
+for strictly fewer machines. If it is ever wanted anyway, it slots in beside `runInWsl()` as another way to
+execute the same three commands.
+
+macOS has no equivalent already-there primitive, so it doesn't get an analogous shortcut.
 
 ## Considered: writing our own ext4 shrink logic
 
@@ -130,11 +136,34 @@ One header, three platform backends, matching the existing convention (`disk/dev
 disk/filesystemresizer.hpp        — interface: shrinkFilesystem(path, partition) -> new sector count; growFilesystem(path, partition)
 disk/linux/filesystemresizer.cpp  — losetup + system e2fsck/resize2fs/dumpe2fs (implemented, tested)
 disk/macos/filesystemresizer.cpp  — hdiutil attach + Homebrew e2fsck/resize2fs/dumpe2fs (implemented, untested — no Mac available)
-disk/windows/filesystemresizer.cpp — stub: isSupported() is always false, with an explanation string the UI displays
+disk/windows/filesystemresizer.cpp — copy partition out + wsl.exe e2fsck/resize2fs/dumpe2fs; shrink only (implemented, untested — no Windows machine available)
 ```
 
-The Windows backend is currently only the stub above, not the WSL2-or-copy-splice plan described earlier
-in this document — that plan is still the recommended next step for Windows, just not built yet.
+### Windows, through WSL
+
+The one assumption that does **not** survive contact with WSL is loop devices. A file under `/mnt/c` is
+reached over the 9p protocol, and `losetup` cannot map it — so the plan of "run the Linux backend verbatim
+inside WSL" does not work. What does work is that `e2fsck` and `resize2fs` operate perfectly well on a
+*plain file* whose first byte is the filesystem's first byte, with no loop device involved at all. So the
+Windows backend copies the partition's byte range out to a temporary file, runs the three tools against it
+through `wsl.exe -e`, reads the new size from `dumpe2fs`, and copies just the shrunk result back before the
+caller rewrites the partition table and truncates.
+
+Consequences worth knowing:
+
+- It costs a pass over the partition in each direction, plus temporary space for it. That is the price of
+  Windows lacking the primitive the other two platforms have.
+- **Grow is not offered on Windows.** Growing needs `resize2fs` to write group descriptors across the whole
+  new extent, so the temporary file would have to be the size of the *destination device*, with a full copy
+  back — a much worse trade than the shrink case, where the copy back is only as large as the shrunk
+  result. `FilesystemResizer::isSupported()` is therefore asked per `Operation`, and the Write page's grow
+  option stays greyed out on Windows with that explanation.
+- Detection is one `wsl.exe -e sh -c "command -v e2fsck && …"` call, which answers "WSL present", "a
+  distribution is installed and can start" and "e2fsprogs is in it" together, and is cached for the
+  process lifetime. If it fails, the checkbox is greyed out with the reason rather than failing mid-run.
+- `wsl.exe` reports its *own* failures in UTF-16 while Linux programs print UTF-8, so output decoding
+  sniffs for interleaved NULs. Windows paths are translated with `wslpath` rather than by assembling
+  `/mnt/<drive>/…` by hand, since that mapping is user-configurable.
 
 `PartitionTable` gained `getLastPartition()`, `planShrinkLastPartition(newSectorCount)` and
 `planGrowLastPartition(targetSizeBytes, alignmentBytes)`, sharing a `resizeLastPartitionTo()` implementation

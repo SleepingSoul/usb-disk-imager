@@ -98,11 +98,11 @@ ScrollView {
 
             AppCheckBox {
                 Layout.fillWidth: true
-                enabled: !Imager.busy && Imager.filesystemResizeSupported
+                enabled: !Imager.busy && Imager.shrinkSupported
                 text: qsTr("Shrink the filesystem afterwards")
-                description: Imager.filesystemResizeSupported
+                description: Imager.shrinkSupported
                     ? qsTr("Shrinks the last partition's ext2/3/4 filesystem to the smallest it can be, and truncates the image to match. Useful for a 64 GB card that only needs 8 GB.")
-                    : Imager.filesystemResizeUnsupportedReason
+                    : Imager.shrinkUnsupportedReason
                 checked: Imager.shrinkFilesystemAfterRead
                 onToggled: Imager.shrinkFilesystemAfterRead = checked
             }
@@ -121,11 +121,6 @@ ScrollView {
                 enabled: root.canRead
                 onClicked: Imager.startRead()
             }
-        }
-
-        ProgressPanel {
-            Layout.fillWidth: true
-            visible: Imager.busy && root.activeHere
         }
 
         ResultPanel {

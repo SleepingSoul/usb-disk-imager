@@ -200,13 +200,17 @@ std::optional<quint64> readBlockCount(const QString& devicePath, quint32& blockS
 }
 } // namespace
 
-bool FilesystemResizer::isSupported()
+bool FilesystemResizer::isSupported(Operation operation)
 {
+    Q_UNUSED(operation)
+
     return allToolsFound();
 }
 
-QString FilesystemResizer::getUnsupportedReason()
+QString FilesystemResizer::getUnsupportedReason(Operation operation)
 {
+    Q_UNUSED(operation)
+
     return allToolsFound()
         ? QString{}
         : tr("Needs e2fsprogs (e2fsck, resize2fs, dumpe2fs) — install it with your package manager.");
@@ -218,9 +222,11 @@ std::optional<FilesystemResizer::ShrinkResult> FilesystemResizer::shrinkFilesyst
     quint32 sectorSizeBytes,
     QString& errorMessage)
 {
+    const Operation operation = Operation::Shrink;
+
     if (!allToolsFound())
     {
-        errorMessage = getUnsupportedReason();
+        errorMessage = getUnsupportedReason(operation);
         return std::nullopt;
     }
 
@@ -273,9 +279,11 @@ bool FilesystemResizer::growFilesystem(const QString& path,
     quint32 sectorSizeBytes,
     QString& errorMessage)
 {
+    const Operation operation = Operation::Grow;
+
     if (!allToolsFound())
     {
-        errorMessage = getUnsupportedReason();
+        errorMessage = getUnsupportedReason(operation);
         return false;
     }
 

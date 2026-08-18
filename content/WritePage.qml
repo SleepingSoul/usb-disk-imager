@@ -107,11 +107,11 @@ ScrollView {
 
             AppCheckBox {
                 Layout.fillWidth: true
-                enabled: !Imager.busy && Imager.filesystemResizeSupported
+                enabled: !Imager.busy && Imager.growSupported
                 text: qsTr("Grow the filesystem to fill the device")
-                description: Imager.filesystemResizeSupported
+                description: Imager.growSupported
                     ? qsTr("Grows the last partition's ext2/3/4 filesystem before writing, so the card is fully usable right away instead of waiting for a first-boot resize.")
-                    : Imager.filesystemResizeUnsupportedReason
+                    : Imager.growUnsupportedReason
                 checked: Imager.growFilesystemToFillDevice
                 onToggled: Imager.growFilesystemToFillDevice = checked
             }
@@ -154,11 +154,6 @@ ScrollView {
                 enabled: root.canWrite
                 onClicked: confirmDialog.open()
             }
-        }
-
-        ProgressPanel {
-            Layout.fillWidth: true
-            visible: Imager.busy && root.activeHere
         }
 
         ResultPanel {

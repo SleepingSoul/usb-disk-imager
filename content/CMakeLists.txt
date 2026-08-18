@@ -31,7 +31,7 @@ qt_add_qml_module(content
         LanguageSwitch.qml
         NavItem.qml
         OptionCard.qml
-        ProgressPanel.qml
+        ProgressDialog.qml
         ResultPanel.qml
         StatTile.qml
         AboutPage.qml

@@ -20,6 +20,15 @@ class FilesystemResizer
 {
     Q_DECLARE_TR_FUNCTIONS(FilesystemResizer)
 public:
+    // Asked about separately because a platform can manage one and not the other: Windows can shrink,
+    // by copying the partition out to a file the tools can work on directly, but growing that way would
+    // mean a temporary copy the size of the destination device.
+    enum class Operation
+    {
+        Shrink,
+        Grow
+    };
+
     struct ShrinkResult
     {
         // Sector count the shrunk filesystem now occupies. The caller repositions the partition table
@@ -27,13 +36,13 @@ public:
         quint64 newPartitionSectorCount{ 0 };
     };
 
-    // True when e2fsck and resize2fs are available right now. The Read/Write pages use this to grey the
-    // corresponding option out instead of hiding it.
-    static bool isSupported();
+    // True when \a operation can run right now. The Read/Write pages use this to grey the corresponding
+    // option out instead of hiding it.
+    static bool isSupported(Operation operation);
 
     // Explains why isSupported() is false, suitable for display next to the greyed-out option. Empty
     // when isSupported() is true.
-    static QString getUnsupportedReason();
+    static QString getUnsupportedReason(Operation operation);
 
     // Shrinks the ext2/3/4 filesystem occupying sectors
     // [partitionStartSector, partitionStartSector + partitionSectorCount) of \a path to the smallest

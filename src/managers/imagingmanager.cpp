@@ -43,6 +43,7 @@ void ImagingManager::start(const UDI::ImagingRequest& request)
     settings.partitionScanSizeBytes = getConfig().partitionScanSizeBytes;
     settings.trimAlignmentBytes = getConfig().trimAlignmentBytes;
     settings.progressIntervalMilliseconds = getConfig().progressIntervalMilliseconds;
+    settings.speedWindowMilliseconds = getConfig().speedWindowMilliseconds;
 
     ImagingJob job{ request, settings, [this](const ImagingProgress& progress)
         {

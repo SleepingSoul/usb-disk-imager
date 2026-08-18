@@ -33,9 +33,8 @@ only the current platform's sources are compiled and therefore scanned.
 one of five headers — `disk/deviceenumerator.hpp`, `disk/rawdevice.hpp`, `disk/volumecontrol.hpp`,
 `disk/filesystemresizer.hpp`, `utils/privileges.hpp` — implemented once per platform under
 `src/disk/{windows,linux,macos,unix}/` and `src/utils/{windows,unix}/`. Nothing outside those directories
-may contain a platform `#ifdef`. `disk/filesystemresizer.hpp` is Windows' one exception: nothing there
-implements it yet (see docs/filesystem-shrink-grow.md), so `src/disk/windows/filesystemresizer.cpp` is a
-stub that reports itself unsupported rather than a real backend.
+may contain a platform `#ifdef`. `disk/filesystemresizer.hpp` is asked per operation
+(`isSupported(Operation)`), because Windows can shrink but not grow — see below.
 
 ## Architecture
 
@@ -81,10 +80,15 @@ reported digest is a digest of the file that was produced.
 describing it — for GPT that means both copies of the entry array (`GptTrimTrailer::
 patchedPrimaryEntryArray` alongside the copy the trailer already carries) get rewritten with a fresh CRC32,
 not just the header, since an unpatched primary copy fails GPT's own consistency check even though the
-header still parses. `FilesystemResizer` decides the new size by shelling out to e2fsck/resize2fs against
-a loop device (Linux) or an attached image (macOS) — a resize is not cancellable once started, since
-killing e2fsck or resize2fs mid-run risks a half-migrated filesystem, which is worse than waiting. Windows
-has no backend yet; see docs/filesystem-shrink-grow.md.
+header still parses. `FilesystemResizer` decides the new size by shelling out to e2fsck/resize2fs, and a
+resize is not cancellable once started — killing either mid-run risks a half-migrated filesystem, which is
+worse than any wait, so those tools are waited on without a deadline and `ImagingViewModel::getCancellable()`
+disables the UI's Cancel for their stages. How the tools reach the filesystem differs per platform: a loop
+device over the byte range (Linux), an attached image (macOS), or — since Windows has neither e2fsprogs nor
+any way to map a byte range of a file — a copy of the partition into a temporary file that e2fsck and
+resize2fs can open directly, run through WSL when it is installed. That copy is why Windows offers shrink
+but not grow, which would need a temporary the size of the whole destination. See
+docs/filesystem-shrink-grow.md.
 
 **QML layer**: `UiManager` registers the C++ singletons imperatively into the `usbdiskimager.qml` module
 (`App`, `Devices`, `Imager`, `Localization`) and loads `qrc:/content/App.qml`. QML files live in their own
