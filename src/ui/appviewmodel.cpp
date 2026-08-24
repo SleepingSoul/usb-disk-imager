@@ -10,6 +10,7 @@
 #include <managers/loggingmanager.hpp>
 #include <managers/uimanager.hpp>
 #include <utils/buildinfo.hpp>
+#include <disk/rawdevice.hpp>
 #include <utils/privileges.hpp>
 
 
@@ -133,9 +134,15 @@ bool AppViewModel::getElevated() const
     return Privileges::isElevated();
 }
 
+bool AppViewModel::getDeviceAccessAvailable() const
+{
+    return Privileges::isElevated() || RawDevice::canOpenWithoutElevation();
+}
+
 bool AppViewModel::getCanElevate() const
 {
-    return Privileges::canElevate();
+    // Nothing to gain from restarting when devices are already reachable.
+    return !getDeviceAccessAvailable() && Privileges::canElevate();
 }
 
 QString AppViewModel::getElevationHint() const

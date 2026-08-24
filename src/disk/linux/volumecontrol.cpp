@@ -7,6 +7,8 @@
 #include <QFile>
 #include <QProcess>
 
+#include <disk/linux/udisks2.hpp>
+
 #include <fcntl.h>
 #include <linux/fs.h>
 #include <sys/ioctl.h>
@@ -52,6 +54,13 @@ VolumeControl::~VolumeControl()
 
 bool VolumeControl::acquire(QString& errorMessage)
 {
+    // umount2() needs root and the umount helper only reaches mounts this session owns, so an ordinary
+    // user goes through the same broker that is about to open the device for us.
+    if (::geteuid() != 0 && UDisks2::isAvailable())
+    {
+        return UDisks2::unmountFilesystems(m_device, errorMessage);
+    }
+
     for (const QString& mountPoint : m_device.mountPoints)
     {
         const QByteArray nativeMountPoint = QFile::encodeName(mountPoint);

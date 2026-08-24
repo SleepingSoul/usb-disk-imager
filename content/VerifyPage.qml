@@ -9,7 +9,7 @@ ScrollView {
 
     readonly property bool activeHere: Imager.operation === "verify"
     readonly property bool canVerify: !Imager.busy
-        && App.elevated
+        && App.deviceAccessAvailable
         && Devices.hasSelection
         && Imager.imageFileExists
 

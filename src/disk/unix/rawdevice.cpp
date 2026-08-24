@@ -13,6 +13,8 @@
 
 #if defined(Q_OS_LINUX)
 #include <linux/fs.h>
+
+#include <disk/linux/udisks2.hpp>
 #elif defined(Q_OS_MACOS)
 #include <sys/disk.h>
 #endif
@@ -234,6 +236,32 @@ std::unique_ptr<RawDevice> RawDevice::open(const DeviceInfo& device, AccessMode 
         flags &= ~directIoFlags;
         fileDescriptor = ::open(device.path.constData(), flags);
     }
+
+    // Being refused as an ordinary user is the normal case, not an error: udisks2 will open the device
+    // on our behalf once polkit has asked the person at the keyboard. O_DIRECT cannot be handed to
+    // udisks2's own open(), but F_SETFL can turn it on afterwards, so the transfer still bypasses the
+    // page cache.
+    if (fileDescriptor < 0 && (errno == EACCES || errno == EPERM) && UDisks2::isAvailable())
+    {
+        QString udisksErrorMessage;
+        fileDescriptor = UDisks2::openDevice(device.path, mode == AccessMode::Write,
+            flags & ~(directIoFlags | O_RDONLY | O_RDWR), udisksErrorMessage);
+
+        if (fileDescriptor < 0)
+        {
+            errorMessage = QCoreApplication::translate("RawDevice", "Could not open %1 through udisks2: %2")
+                .arg(QString::fromUtf8(device.path), udisksErrorMessage);
+            return nullptr;
+        }
+
+        const int currentFlags = ::fcntl(fileDescriptor, F_GETFL);
+
+        if (currentFlags < 0 || ::fcntl(fileDescriptor, F_SETFL, currentFlags | directIoFlags) != 0)
+        {
+            qWarning() << "Could not enable direct I/O on the descriptor udisks2 returned for"
+                       << device.path << "- continuing with buffered I/O";
+        }
+    }
 #endif
 
     if (fileDescriptor < 0)
@@ -274,5 +302,15 @@ std::unique_ptr<RawDevice> RawDevice::open(const DeviceInfo& device, AccessMode 
     const quint32 sectorSizeBytes = querySectorSize(fileDescriptor, device.logicalSectorSizeBytes);
 
     return std::make_unique<UnixRawDevice>(fileDescriptor, sizeBytes, sectorSizeBytes);
+}
+
+bool RawDevice::canOpenWithoutElevation()
+{
+#if defined(Q_OS_LINUX)
+    return UDisks2::isAvailable();
+#else
+    // macOS has no equivalent broker: /dev/rdiskN needs the process itself to be root.
+    return false;
+#endif
 }
 } // namespace UDI

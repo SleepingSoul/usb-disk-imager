@@ -48,14 +48,14 @@ Rectangle {
         Item { Layout.fillWidth: true }
 
         Badge {
-            visible: App.elevated
-            text: qsTr("ADMINISTRATOR")
+            visible: App.deviceAccessAvailable
+            text: App.elevated ? qsTr("ADMINISTRATOR") : qsTr("DEVICE ACCESS")
             textColor: Style.accent
             fillColor: Style.accentSoft
         }
 
         Badge {
-            visible: !App.elevated
+            visible: !App.deviceAccessAvailable
             text: qsTr("LIMITED RIGHTS")
             textColor: Style.warning
             fillColor: Style.warningSoft

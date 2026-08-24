@@ -38,6 +38,9 @@ struct DeviceInfo
 
     std::vector<QString> mountPoints;
     std::vector<QString> volumeLabels;
+    // The partition each mount point belongs to, parallel to mountPoints. Only Linux fills this in, and
+    // only because udisks2 unmounts a named partition object rather than a mount point.
+    std::vector<QString> mountedDevicePaths;
 
     quint64 sizeBytes{ 0 };
     quint32 logicalSectorSizeBytes{ 512 };

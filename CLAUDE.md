@@ -58,6 +58,14 @@ managers on worker threads deregister themselves as those threads unwind.
 **Configs** are looked up next to the executable first (`configs/<file>.json`) and fall back to the copy
 baked into the binary's resources, so a deployed build can be retuned without a rebuild.
 
+**Device access without root** (Linux): `RawDevice::open()` opens `/dev/sdX` directly when the process is
+root, and falls back to udisks2 over D-Bus (`src/disk/linux/udisks2.cpp`) when that is refused, which is
+what lets an ordinary desktop user image a card after one polkit prompt — and the only thing that works
+inside a strictly confined snap, where `pkexec` and a udev rule are both unavailable. `O_EXCL` is passed
+through udisks2's own `flags` option so a mounted device is still refused; `O_DIRECT` cannot be, so it is
+set afterwards with `fcntl(F_SETFL)`. The UI gates on `App.deviceAccessAvailable` — "can a device be
+opened at all" — rather than on elevation. See docs/snap-packaging.md.
+
 **Device scanning** (`src/disk/`): `DeviceManager` re-enumerates on a timer on its own thread. Two rules
 hold in every backend and are the whole reason this app coexists with VeraCrypt: a volume is never opened
 before it has been identified as a partition of a physical disk (on Windows, via `QueryDosDevice` and a

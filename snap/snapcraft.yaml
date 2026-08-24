@@ -1,0 +1,72 @@
+name: usb-disk-imager
+title: USB Disk Imager
+base: core24
+adopt-info: usb-disk-imager
+summary: Read USB drives and memory cards into image files and write them back
+description: |
+  A raw disk imager for USB drives and memory cards. It reads a device into an
+  image file, writes an image file back onto a device, and compares the two byte
+  for byte.
+
+  A read can stop at the end of the data instead of copying the whole medium:
+  either after the last partition — rebuilding GPT metadata so the shorter image
+  stays valid — or after the last sector that is not entirely zero.
+
+  Devices are discovered without opening volumes that are not partitions of a
+  physical disk, so virtual volumes from disk-encryption tools are left alone
+  rather than waited on.
+
+  Devices are opened through udisks2, so imaging a card asks for authorisation
+  once rather than needing the whole application to be restarted as root.
+
+license: MIT
+website: https://github.com/SleepingSoul/usb-disk-imager
+issues: https://github.com/SleepingSoul/usb-disk-imager/issues
+source-code: https://github.com/SleepingSoul/usb-disk-imager
+icon: content/assets/icons/logo.svg
+
+grade: stable
+confinement: strict
+compression: lzo
+
+platforms:
+  amd64:
+
+apps:
+  usb-disk-imager:
+    common-id: dev.tkatolikian.usbdiskimager
+    desktop: usr/share/applications/usb-disk-imager.desktop
+    command: usr/bin/usb-disk-imager
+    extensions:
+      - kde-neon-qt6
+    plugs:
+      # Reading and writing the image file itself.
+      - home
+      - removable-media
+      # The whole privilege story: udisks2 opens the block device on our behalf once polkit has
+      # authorised it, so the snap never needs block-devices and never needs to run as root.
+      - udisks2
+      # Enumeration only: sysfs for the device list, the mount table to tell which volumes are mounted.
+      - hardware-observe
+      - mount-observe
+
+parts:
+  usb-disk-imager:
+    plugin: cmake
+    source: .
+    source-type: local
+    cmake-parameters:
+      - -DCMAKE_BUILD_TYPE=Release
+      - -DCMAKE_INSTALL_PREFIX=/usr
+      # Qt arrives from the kde-neon-qt6 content snap; a private copy would shadow it and add ~150 MB.
+      - -DUDI_DEPLOY_QT_RUNTIME=OFF
+    build-packages:
+      - libxxhash-dev
+    override-pull: |
+      craftctl default
+      craftctl set version="$(git describe --tags --always 2>/dev/null || echo 1.0.0)"
+    override-prime: |
+      craftctl default
+      # A udev rule inside a snap is never read by the host, and the filesystem resizer's tools are not
+      # shipped: losetup cannot map a device under confinement, so shrinking greys itself out instead.
+      rm -rf usr/etc/udev
