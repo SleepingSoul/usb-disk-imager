@@ -35,6 +35,8 @@ enum class ImagingStage
     Transferring,
     Verifying,
     Finalizing,
+    ShrinkingFilesystem,
+    GrowingFilesystem,
     Complete,
     Failed,
     Cancelled
@@ -48,6 +50,15 @@ struct ImagingRequest
     TrimMode trimMode{ TrimMode::None };
     bool verifyAfterWrite{ false };
     bool computeSha256{ false };
+    // A run of trailing zero bytes in the image is not written at all, leaving whatever was already on
+    // the device there. Safe only because that tail lies outside every partition the image describes.
+    bool skipTrailingZerosOnWrite{ false };
+    // Shrinks the ext2/3/4 filesystem in the last partition to the smallest e2fsprogs will allow, and
+    // truncates the image to match, once the read itself has finished.
+    bool shrinkFilesystemAfterRead{ false };
+    // Grows the ext2/3/4 filesystem in the last partition of the image to fill the destination device,
+    // before the write itself starts.
+    bool growFilesystemToFillDevice{ false };
 };
 
 struct ImagingProgress

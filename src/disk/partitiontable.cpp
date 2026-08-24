@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <limits>
 
 #include <QLoggingCategory>
 
@@ -314,6 +315,8 @@ bool PartitionTable::parseMbr(const std::vector<std::uint8_t>& head)
         return false;
     }
 
+    m_mbrSector.assign(head.cbegin(), head.cbegin() + m_sectorSizeBytes);
+
     for (std::size_t index = 0; index < Mbr::EntryCount; ++index)
     {
         const std::uint8_t* const entry = head.data() + Mbr::FirstEntryOffset + index * Mbr::EntrySizeBytes;
@@ -340,6 +343,17 @@ bool PartitionTable::parseMbr(const std::vector<std::uint8_t>& head)
     }
 
     return !m_partitions.empty();
+}
+
+const PartitionEntry* PartitionTable::getLastPartition() const
+{
+    const auto lastPartitionIt = std::max_element(m_partitions.cbegin(), m_partitions.cend(),
+        [](const PartitionEntry& a, const PartitionEntry& b)
+        {
+            return a.firstSector + a.sectorCount < b.firstSector + b.sectorCount;
+        });
+
+    return lastPartitionIt != m_partitions.cend() ? &(*lastPartitionIt) : nullptr;
 }
 
 std::optional<TrimPlan> PartitionTable::planTrim(quint64 alignmentBytes) const
@@ -416,6 +430,215 @@ std::optional<TrimPlan> PartitionTable::planGptTrim() const
     plan.dataSizeBytes = dataSectorCount * m_sectorSizeBytes;
     plan.imageSizeBytes = imageSizeBytes;
     plan.gptTrailer = std::move(trailer);
+
+    return plan;
+}
+
+std::optional<TrimPlan> PartitionTable::planShrinkLastPartition(quint64 newSectorCount) const
+{
+    const PartitionEntry* const target = getLastPartition();
+
+    if (!target || newSectorCount == 0 || newSectorCount > target->sectorCount)
+    {
+        return std::nullopt;
+    }
+
+    return resizeLastPartitionTo(*target, newSectorCount, m_deviceSizeBytes);
+}
+
+std::optional<TrimPlan> PartitionTable::planGrowLastPartition(quint64 targetSizeBytes, quint64 alignmentBytes) const
+{
+    const PartitionEntry* const target = getLastPartition();
+
+    if (!target || m_sectorSizeBytes == 0)
+    {
+        return std::nullopt;
+    }
+
+    const quint64 targetSectorCount = targetSizeBytes / m_sectorSizeBytes;
+    // A GPT device reserves its trailing metadata past the data area; an MBR device has none, so the
+    // partition may run to the very last sector.
+    const quint64 reservedTrailerSectors = m_scheme == PartitionScheme::Gpt
+        ? (static_cast<quint64>(m_gptEntryArray.size()) + m_sectorSizeBytes - 1) / m_sectorSizeBytes + 1
+        : 0;
+
+    if (targetSectorCount <= reservedTrailerSectors)
+    {
+        return std::nullopt;
+    }
+
+    const quint64 maxLastSector = targetSectorCount - reservedTrailerSectors - 1;
+
+    if (maxLastSector < target->firstSector)
+    {
+        return std::nullopt;
+    }
+
+    const quint64 maxSectorCount = maxLastSector - target->firstSector + 1;
+    const quint64 alignment = std::max<quint64>(alignmentBytes, m_sectorSizeBytes) / m_sectorSizeBytes;
+    const quint64 alignedSectorCount = alignment > 0 ? (maxSectorCount / alignment) * alignment : maxSectorCount;
+
+    if (alignedSectorCount <= target->sectorCount)
+    {
+        return std::nullopt;
+    }
+
+    return resizeLastPartitionTo(*target, alignedSectorCount, targetSizeBytes);
+}
+
+std::optional<TrimPlan> PartitionTable::resizeLastPartitionTo(const PartitionEntry& target,
+    quint64 newSectorCount,
+    quint64 maxAllowedSizeBytes) const
+{
+    if (m_scheme == PartitionScheme::Gpt)
+    {
+        return planGptResize(target, target.firstSector + newSectorCount - 1, maxAllowedSizeBytes);
+    }
+
+    return planMbrResize(target, newSectorCount, maxAllowedSizeBytes);
+}
+
+std::optional<TrimPlan> PartitionTable::planGptResize(const PartitionEntry& target,
+    quint64 newLastSector,
+    quint64 maxAllowedSizeBytes) const
+{
+    if (m_gptPrimaryHeader.size() != m_sectorSizeBytes || m_gptEntryArray.empty())
+    {
+        return std::nullopt;
+    }
+
+    std::vector<std::uint8_t> patchedEntryArray = m_gptEntryArray;
+    bool patched = false;
+
+    for (quint32 index = 0; index < m_gptEntryCount; ++index)
+    {
+        std::uint8_t* const entry = patchedEntryArray.data() + static_cast<std::size_t>(index) * m_gptEntrySizeBytes;
+
+        if (isAllZero(entry + Gpt::EntryTypeGuidOffset, Gpt::GuidSizeBytes))
+        {
+            continue;
+        }
+
+        if (readLittleEndian64(entry + Gpt::EntryFirstLbaOffset) == target.firstSector)
+        {
+            writeLittleEndian64(entry + Gpt::EntryLastLbaOffset, newLastSector);
+            patched = true;
+            break;
+        }
+    }
+
+    if (!patched)
+    {
+        return std::nullopt;
+    }
+
+    // The entry just changed, so the checksum the header carries for the whole array is now stale;
+    // trimming never patches an entry, which is the one thing that lets it leave this checksum alone.
+    const quint32 entryArrayCrc = computeCrc32(patchedEntryArray.data(), patchedEntryArray.size());
+
+    const quint64 dataSectorCount = newLastSector + 1;
+    const quint64 entryArraySectorCount =
+        (static_cast<quint64>(patchedEntryArray.size()) + m_sectorSizeBytes - 1) / m_sectorSizeBytes;
+    const quint64 imageSectorCount = dataSectorCount + entryArraySectorCount + 1;
+    const quint64 imageSizeBytes = imageSectorCount * m_sectorSizeBytes;
+
+    if (imageSizeBytes > maxAllowedSizeBytes)
+    {
+        return std::nullopt;
+    }
+
+    const quint64 backupHeaderSector = imageSectorCount - 1;
+    const quint64 backupEntryArrayFirstSector = dataSectorCount;
+
+    GptTrimTrailer trailer;
+    trailer.primaryHeaderSectorIndex = Gpt::HeaderSectorIndex;
+    trailer.primaryHeaderSector = m_gptPrimaryHeader;
+
+    writeLittleEndian64(trailer.primaryHeaderSector.data() + Gpt::MyLbaOffset, Gpt::HeaderSectorIndex);
+    writeLittleEndian64(trailer.primaryHeaderSector.data() + Gpt::AlternateLbaOffset, backupHeaderSector);
+    writeLittleEndian64(trailer.primaryHeaderSector.data() + Gpt::LastUsableLbaOffset, newLastSector);
+    writeLittleEndian32(trailer.primaryHeaderSector.data() + Gpt::EntryArrayCrcOffset, entryArrayCrc);
+    refreshGptHeaderChecksum(trailer.primaryHeaderSector);
+
+    std::vector<std::uint8_t> backupHeaderSectorBytes = trailer.primaryHeaderSector;
+    writeLittleEndian64(backupHeaderSectorBytes.data() + Gpt::MyLbaOffset, backupHeaderSector);
+    writeLittleEndian64(backupHeaderSectorBytes.data() + Gpt::AlternateLbaOffset, Gpt::HeaderSectorIndex);
+    writeLittleEndian64(backupHeaderSectorBytes.data() + Gpt::EntryArrayLbaOffset, backupEntryArrayFirstSector);
+    refreshGptHeaderChecksum(backupHeaderSectorBytes);
+
+    trailer.trailerSectors.resize(static_cast<std::size_t>((entryArraySectorCount + 1) * m_sectorSizeBytes), 0u);
+    std::copy(patchedEntryArray.cbegin(), patchedEntryArray.cend(), trailer.trailerSectors.begin());
+    std::copy(backupHeaderSectorBytes.cbegin(), backupHeaderSectorBytes.cend(),
+        trailer.trailerSectors.begin() + static_cast<std::ptrdiff_t>(entryArraySectorCount * m_sectorSizeBytes));
+
+    trailer.primaryEntryArrayFirstSector = m_gptEntryArrayFirstSector;
+    trailer.patchedPrimaryEntryArray = std::move(patchedEntryArray);
+
+    TrimPlan plan;
+    plan.dataSizeBytes = dataSectorCount * m_sectorSizeBytes;
+    plan.imageSizeBytes = imageSizeBytes;
+    plan.gptTrailer = std::move(trailer);
+
+    return plan;
+}
+
+std::optional<TrimPlan> PartitionTable::planMbrResize(const PartitionEntry& target,
+    quint64 newSectorCount,
+    quint64 maxAllowedSizeBytes) const
+{
+    if (m_mbrSector.size() != m_sectorSizeBytes)
+    {
+        return std::nullopt;
+    }
+
+    // An MBR entry stores its first sector and length in 32 bits each. Truncating either would describe
+    // a partition unrelated to the filesystem that is about to fill it.
+    if (newSectorCount > std::numeric_limits<quint32>::max()
+        || target.firstSector > std::numeric_limits<quint32>::max())
+    {
+        qWarning() << "An MBR partition cannot describe" << newSectorCount << "sectors at sector"
+                   << target.firstSector << "- leaving the partition table alone";
+        return std::nullopt;
+    }
+
+    std::vector<std::uint8_t> patchedSector = m_mbrSector;
+    bool patched = false;
+
+    for (std::size_t index = 0; index < Mbr::EntryCount; ++index)
+    {
+        std::uint8_t* const entry = patchedSector.data() + Mbr::FirstEntryOffset + index * Mbr::EntrySizeBytes;
+        const std::uint8_t type = entry[Mbr::TypeOffset];
+
+        if (type == 0x00 || type == Mbr::GptProtectiveType)
+        {
+            continue;
+        }
+
+        if (readLittleEndian32(entry + Mbr::FirstSectorOffset) == target.firstSector)
+        {
+            writeLittleEndian32(entry + Mbr::SectorCountOffset, static_cast<quint32>(newSectorCount));
+            patched = true;
+            break;
+        }
+    }
+
+    if (!patched)
+    {
+        return std::nullopt;
+    }
+
+    const quint64 newLastSector = target.firstSector + newSectorCount - 1;
+    const quint64 imageSizeBytes = (newLastSector + 1) * m_sectorSizeBytes;
+
+    if (imageSizeBytes > maxAllowedSizeBytes)
+    {
+        return std::nullopt;
+    }
+
+    TrimPlan plan;
+    plan.dataSizeBytes = imageSizeBytes;
+    plan.imageSizeBytes = imageSizeBytes;
+    plan.patchedFirstSector = std::move(patchedSector);
 
     return plan;
 }

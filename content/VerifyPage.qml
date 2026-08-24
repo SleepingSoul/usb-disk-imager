@@ -80,11 +80,6 @@ ScrollView {
             }
         }
 
-        ProgressPanel {
-            Layout.fillWidth: true
-            visible: Imager.busy && root.activeHere
-        }
-
         ResultPanel {
             Layout.fillWidth: true
             visible: Imager.hasResult && root.activeHere

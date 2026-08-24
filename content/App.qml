@@ -114,4 +114,8 @@ ApplicationWindow {
             }
         }
     }
+
+    // One instance for the whole window rather than one per page: it is modal, so which page is behind
+    // it no longer decides whether progress is on screen.
+    ProgressDialog {}
 }

@@ -16,6 +16,7 @@ public:
     quint64 partitionScanSizeBytes;
     quint64 trimAlignmentBytes;
     int progressIntervalMilliseconds;
+    int speedWindowMilliseconds;
 
     bool parse(const ManagerConfigMap& config)
     {
@@ -25,6 +26,7 @@ public:
         result = config["partition_scan_size_b"_L1].get(partitionScanSizeBytes) && result;
         result = config["trim_alignment_b"_L1].get(trimAlignmentBytes) && result;
         result = config["progress_interval_ms"_L1].get(progressIntervalMilliseconds) && result;
+        result = config["speed_window_ms"_L1].get(speedWindowMilliseconds) && result;
 
         return result;
     }

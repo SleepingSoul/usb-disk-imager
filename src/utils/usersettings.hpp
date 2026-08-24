@@ -26,6 +26,15 @@ public:
     static bool getComputeSha256();
     static void setComputeSha256(bool computeSha256);
 
+    static bool getSkipTrailingZerosOnWrite();
+    static void setSkipTrailingZerosOnWrite(bool skipTrailingZerosOnWrite);
+
+    static bool getShrinkFilesystemAfterRead();
+    static void setShrinkFilesystemAfterRead(bool shrinkFilesystemAfterRead);
+
+    static bool getGrowFilesystemToFillDevice();
+    static void setGrowFilesystemToFillDevice(bool growFilesystemToFillDevice);
+
     static QString getLastImageDirectory();
     static void setLastImageDirectory(const QString& directoryPath);
 };

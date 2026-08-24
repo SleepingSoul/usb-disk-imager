@@ -27,9 +27,20 @@ class ImagingViewModel : public IViewModel
     Q_PROPERTY(QString trimMode READ getTrimMode WRITE setTrimMode NOTIFY optionsChanged FINAL)
     Q_PROPERTY(bool verifyAfterWrite READ getVerifyAfterWrite WRITE setVerifyAfterWrite NOTIFY optionsChanged FINAL)
     Q_PROPERTY(bool computeSha256 READ getComputeSha256 WRITE setComputeSha256 NOTIFY optionsChanged FINAL)
+    Q_PROPERTY(bool skipTrailingZerosOnWrite READ getSkipTrailingZerosOnWrite WRITE setSkipTrailingZerosOnWrite
+        NOTIFY optionsChanged FINAL)
+    Q_PROPERTY(bool shrinkSupported READ getShrinkSupported CONSTANT)
+    Q_PROPERTY(QString shrinkUnsupportedReason READ getShrinkUnsupportedReason CONSTANT)
+    Q_PROPERTY(bool growSupported READ getGrowSupported CONSTANT)
+    Q_PROPERTY(QString growUnsupportedReason READ getGrowUnsupportedReason CONSTANT)
+    Q_PROPERTY(bool shrinkFilesystemAfterRead READ getShrinkFilesystemAfterRead WRITE setShrinkFilesystemAfterRead
+        NOTIFY optionsChanged FINAL)
+    Q_PROPERTY(bool growFilesystemToFillDevice READ getGrowFilesystemToFillDevice WRITE setGrowFilesystemToFillDevice
+        NOTIFY optionsChanged FINAL)
 
     Q_PROPERTY(bool busy READ getBusy NOTIFY stateChanged FINAL)
     Q_PROPERTY(bool cancelling READ getCancelling NOTIFY stateChanged FINAL)
+    Q_PROPERTY(bool cancellable READ getCancellable NOTIFY progressChanged FINAL)
     Q_PROPERTY(QString operation READ getOperationToken NOTIFY stateChanged FINAL)
 
     Q_PROPERTY(double progressFraction READ getProgressFraction NOTIFY progressChanged FINAL)
@@ -68,9 +79,22 @@ public:
     void setVerifyAfterWrite(bool verifyAfterWrite);
     bool getComputeSha256() const { return m_computeSha256; }
     void setComputeSha256(bool computeSha256);
+    bool getSkipTrailingZerosOnWrite() const { return m_skipTrailingZerosOnWrite; }
+    void setSkipTrailingZerosOnWrite(bool skipTrailingZerosOnWrite);
+    bool getShrinkSupported() const { return m_shrinkSupported; }
+    QString getShrinkUnsupportedReason() const { return m_shrinkUnsupportedReason; }
+    bool getGrowSupported() const { return m_growSupported; }
+    QString getGrowUnsupportedReason() const { return m_growUnsupportedReason; }
+    bool getShrinkFilesystemAfterRead() const { return m_shrinkFilesystemAfterRead; }
+    void setShrinkFilesystemAfterRead(bool shrinkFilesystemAfterRead);
+    bool getGrowFilesystemToFillDevice() const { return m_growFilesystemToFillDevice; }
+    void setGrowFilesystemToFillDevice(bool growFilesystemToFillDevice);
 
     bool getBusy() const { return m_busy; }
     bool getCancelling() const { return m_cancelling; }
+    // False while a filesystem resize is running: killing e2fsck or resize2fs part-way can leave the
+    // filesystem half migrated, so those stages have to run to completion.
+    bool getCancellable() const;
     QString getOperationToken() const;
 
     double getProgressFraction() const;
@@ -128,6 +152,16 @@ private:
     QString m_trimMode;
     bool m_verifyAfterWrite{ true };
     bool m_computeSha256{ false };
+    bool m_skipTrailingZerosOnWrite{ false };
+    bool m_shrinkFilesystemAfterRead{ false };
+    bool m_growFilesystemToFillDevice{ false };
+
+    // Whether the tools a resize needs are installed does not change while the app is running, so both
+    // are resolved once. They are asked separately because a platform can manage one and not the other.
+    const bool m_shrinkSupported;
+    const QString m_shrinkUnsupportedReason;
+    const bool m_growSupported;
+    const QString m_growUnsupportedReason;
 
     bool m_busy{ false };
     bool m_cancelling{ false };

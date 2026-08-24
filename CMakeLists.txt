@@ -93,6 +93,7 @@ set(PROJECT_HEADERS
     src/configs/uimanagerconfig.hpp
     src/disk/deviceenumerator.hpp
     src/disk/disktypes.hpp
+    src/disk/filesystemresizer.hpp
     src/disk/partitiontable.hpp
     src/disk/rawdevice.hpp
     src/disk/volumecontrol.hpp
@@ -115,11 +116,13 @@ set(PROJECT_HEADERS
     src/utils/usersettings.hpp
 )
 
-# Device enumeration, raw device access, taking volumes offline and gaining rights are the four things
-# that have no portable form, so each platform brings its own implementation of the same headers.
+# Device enumeration, raw device access, taking volumes offline, gaining rights and resizing a
+# filesystem are the five things that have no portable form, so each platform brings its own
+# implementation of the same headers.
 if (WIN32)
     list(APPEND PROJECT_SOURCES
         src/disk/windows/deviceenumerator.cpp
+        src/disk/windows/filesystemresizer.cpp
         src/disk/windows/rawdevice.cpp
         src/disk/windows/volumecontrol.cpp
         src/disk/windows/windowsutils.cpp
@@ -131,6 +134,7 @@ if (WIN32)
 elseif (APPLE)
     list(APPEND PROJECT_SOURCES
         src/disk/macos/deviceenumerator.cpp
+        src/disk/macos/filesystemresizer.cpp
         src/disk/macos/volumecontrol.cpp
         src/disk/unix/rawdevice.cpp
         src/utils/unix/privileges.cpp
@@ -138,6 +142,7 @@ elseif (APPLE)
 elseif (UNIX)
     list(APPEND PROJECT_SOURCES
         src/disk/linux/deviceenumerator.cpp
+        src/disk/linux/filesystemresizer.cpp
         src/disk/linux/volumecontrol.cpp
         src/disk/unix/rawdevice.cpp
         src/utils/unix/privileges.cpp

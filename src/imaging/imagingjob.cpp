@@ -1,12 +1,14 @@
 #include <imaging/imagingjob.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cstring>
 
 #include <QFile>
 #include <QFileInfo>
 #include <QSaveFile>
 
+#include <disk/filesystemresizer.hpp>
 #include <disk/volumecontrol.hpp>
 #include <imaging/hasher.hpp>
 #include <utils/formatting.hpp>
@@ -20,7 +22,22 @@ namespace
 // expects a megabyte of slack all live in the first sectors.
 constexpr quint64 MinimumTrimmedImageBytes = 1024u * 1024u;
 
-constexpr double SpeedSmoothingFactor = 0.3;
+// A rate taken from one progress interval swings between the two halves of a card's own write cycle —
+// a burst into its cache, then a stall while it flushes — hard enough to make the remaining-time
+// estimate unreadable. Averaging across a window of readings rides over both. This is the shortest
+// span worth dividing by, before which no estimate is published at all.
+constexpr qint64 MinimumSpeedSpanMilliseconds = 250;
+
+// Real removable media report one of these two as their logical sector size. GPT's checksum lets each
+// be tried in turn and trusted only once it actually validates; MBR has no such check, so the fallback
+// below just assumes the near-universal majority case.
+constexpr std::array<quint32, 2> CandidateSectorSizesBytes{ 512u, 4096u };
+
+// The ext2/3/4 superblock starts 1024 bytes into the filesystem and its magic number sits 0x38 bytes
+// into that, regardless of block size.
+constexpr quint64 ExtSuperblockOffsetBytes = 1024;
+constexpr quint64 ExtMagicOffsetBytes = 0x38;
+constexpr quint16 ExtMagicNumber = 0xEF53;
 
 quint64 roundUpTo(quint64 value, quint64 granularity)
 {
@@ -184,6 +201,19 @@ ImagingResult ImagingJob::runRead()
     m_fastDigestHex = hasher.getFastDigestHex();
     m_sha256Hex = hasher.getSha256Hex();
 
+    if (m_request.shrinkFilesystemAfterRead)
+    {
+        reportProgress(ImagingStage::ShrinkingFilesystem, 0, 0, true);
+
+        QString shrinkErrorMessage;
+
+        if (!shrinkImageFilesystem(shrinkErrorMessage))
+        {
+            return makeResult(ImagingStage::Failed, tr("“%1” was read successfully, but its filesystem "
+                "could not be shrunk: %2").arg(m_request.imageFilePath, shrinkErrorMessage));
+        }
+    }
+
     return makeResult(ImagingStage::Complete, QString{});
 }
 
@@ -196,7 +226,9 @@ ImagingResult ImagingJob::runWrite()
         return makeResult(ImagingStage::Failed, tr("Image file “%1” does not exist.").arg(m_request.imageFilePath));
     }
 
-    const quint64 imageSizeBytes = static_cast<quint64>(imageInfo.size());
+    // Not const: growFilesystemToFillDevice below can change the image's size on disk before the main
+    // copy loop starts.
+    quint64 imageSizeBytes = static_cast<quint64>(imageInfo.size());
 
     if (imageSizeBytes == 0)
     {
@@ -251,10 +283,79 @@ ImagingResult ImagingJob::runWrite()
             .arg(QString::fromUtf8(m_request.device.path), device->getLastError()));
     }
 
+    if (m_request.growFilesystemToFillDevice)
+    {
+        reportProgress(ImagingStage::GrowingFilesystem, 0, 0, true);
+
+        // Grown here, on the image file itself, rather than on the device after writing: the same
+        // file-based machinery the shrink feature already uses, instead of a second, riskier path that
+        // has to fight this job's own exclusive hold on the device to attach a loop device against it.
+        imageFile.close();
+
+        QString growErrorMessage;
+
+        if (!growImageFilesystem(device->getSizeBytes(), growErrorMessage))
+        {
+            return makeResult(ImagingStage::Failed, tr("Could not grow the filesystem in “%1” before "
+                "writing it: %2").arg(m_request.imageFilePath, growErrorMessage));
+        }
+
+        if (!imageFile.open(QIODevice::ReadOnly))
+        {
+            return makeResult(ImagingStage::Failed, tr("Could not reopen “%1” after growing it: %2")
+                .arg(m_request.imageFilePath, imageFile.errorString()));
+        }
+
+        imageSizeBytes = static_cast<quint64>(QFileInfo{ m_request.imageFilePath }.size());
+    }
+
     const quint32 sectorSizeBytes = device->getSectorSizeBytes();
     const quint64 chunkSizeBytes = alignedChunkSize(sectorSizeBytes);
     AlignedBuffer buffer{ static_cast<std::size_t>(chunkSizeBytes), bufferAlignment(sectorSizeBytes) };
     Hasher hasher{ m_request.computeSha256 };
+
+    // The whole image is still read and hashed below regardless, so the reported digest always matches
+    // the image file exactly; only the device write for a trailing run of zeros is skipped.
+    quint64 writeSizeBytes = imageSizeBytes;
+
+    if (m_request.skipTrailingZerosOnWrite)
+    {
+        reportProgress(ImagingStage::Analyzing, 0, imageSizeBytes, true);
+
+        // Only the tail past the last partition may be left showing the device's previous contents. A
+        // zero run *inside* a partition is part of the filesystem — unallocated blocks read as zeros —
+        // and skipping that would leave stale bytes where the image says zeros, so the written
+        // filesystem would no longer match the image.
+        const quint64 lastPartitionEndBytes = findLastPartitionEndInImage(imageSizeBytes);
+
+        const auto lastNonZeroByte = findLastNonZeroByteInImage(imageFile, imageSizeBytes);
+
+        if (isCancelled())
+        {
+            return makeResult(ImagingStage::Cancelled, QString{});
+        }
+
+        // No value means the scan itself failed rather than that the image is empty; writing all of it
+        // is the only safe reading of that.
+        const quint64 lastDataEndBytes = lastNonZeroByte
+            ? std::min(roundUpTo(*lastNonZeroByte + 1, sectorSizeBytes), imageSizeBytes)
+            : imageSizeBytes;
+
+        writeSizeBytes = std::max(lastDataEndBytes, lastPartitionEndBytes);
+
+        if (writeSizeBytes < imageSizeBytes)
+        {
+            qInfo() << "Skipping" << (imageSizeBytes - writeSizeBytes) << "trailing zero bytes of"
+                    << m_request.imageFilePath << "- the corresponding tail of"
+                    << m_request.device.path << "is left untouched";
+        }
+
+        if (!imageFile.seek(0))
+        {
+            return makeResult(ImagingStage::Failed, tr("Could not rewind “%1”: %2")
+                .arg(m_request.imageFilePath, imageFile.errorString()));
+        }
+    }
 
     qInfo() << "Writing" << imageSizeBytes << "bytes from" << m_request.imageFilePath
             << "to" << m_request.device.path;
@@ -280,22 +381,29 @@ ImagingResult ImagingJob::runWrite()
 
         hasher.update(buffer.data(), static_cast<std::size_t>(chunkBytes));
 
-        // A device only accepts whole sectors, so an image whose length is not a multiple of the sector
-        // size gets its final sector padded with zeros.
-        const qint64 sectorAlignedBytes =
-            static_cast<qint64>(roundUpTo(static_cast<quint64>(chunkBytes), sectorSizeBytes));
+        const qint64 bytesToWrite = offsetBytes < writeSizeBytes
+            ? static_cast<qint64>(std::min(static_cast<quint64>(chunkBytes), writeSizeBytes - offsetBytes))
+            : 0;
 
-        if (sectorAlignedBytes > chunkBytes)
+        if (bytesToWrite > 0)
         {
-            std::fill(buffer.data() + chunkBytes, buffer.data() + sectorAlignedBytes, std::uint8_t{ 0 });
-        }
+            // A device only accepts whole sectors, so a write whose length is not a multiple of the
+            // sector size gets its final sector padded with zeros.
+            const qint64 sectorAlignedBytes =
+                static_cast<qint64>(roundUpTo(static_cast<quint64>(bytesToWrite), sectorSizeBytes));
 
-        if (device->write(buffer.data(), sectorAlignedBytes) != sectorAlignedBytes)
-        {
-            return makeResult(ImagingStage::Failed, tr("Writing to %1 failed at offset %2: %3")
-                .arg(QString::fromUtf8(m_request.device.path),
-                    formatByteSize(offsetBytes),
-                    device->getLastError()));
+            if (sectorAlignedBytes > bytesToWrite)
+            {
+                std::fill(buffer.data() + bytesToWrite, buffer.data() + sectorAlignedBytes, std::uint8_t{ 0 });
+            }
+
+            if (device->write(buffer.data(), sectorAlignedBytes) != sectorAlignedBytes)
+            {
+                return makeResult(ImagingStage::Failed, tr("Writing to %1 failed at offset %2: %3")
+                    .arg(QString::fromUtf8(m_request.device.path),
+                        formatByteSize(offsetBytes),
+                        device->getLastError()));
+            }
         }
 
         offsetBytes += static_cast<quint64>(chunkBytes);
@@ -314,6 +422,8 @@ ImagingResult ImagingJob::runWrite()
 
     m_fastDigestHex = hasher.getFastDigestHex();
     m_sha256Hex = hasher.getSha256Hex();
+    // Reported as the amount written rather than the (possibly larger) amount read and hashed above.
+    m_processedBytes = writeSizeBytes;
 
     if (m_request.verifyAfterWrite)
     {
@@ -323,8 +433,10 @@ ImagingResult ImagingJob::runWrite()
                 .arg(m_request.imageFilePath, imageFile.errorString()));
         }
 
-        if (!compareDeviceWithImage(*device, imageFile, imageSizeBytes,
-                ImagingStage::Verifying, 0, imageSizeBytes, errorMessage))
+        // A skipped tail was never written, so verifying it would only ever compare the image's zeros
+        // against whatever the device already had there.
+        if (!compareDeviceWithImage(*device, imageFile, writeSizeBytes,
+                ImagingStage::Verifying, 0, writeSizeBytes, errorMessage))
         {
             if (isCancelled())
             {
@@ -538,6 +650,377 @@ std::optional<quint64> ImagingJob::findLastNonZeroByte(RawDevice& device)
     return 0;
 }
 
+std::optional<quint64> ImagingJob::findLastNonZeroByteInImage(QIODevice& imageFile, quint64 imageSizeBytes)
+{
+    const quint64 chunkSizeBytes = std::max<quint64>(m_settings.chunkSizeBytes, 1u);
+    std::vector<std::uint8_t> buffer(static_cast<std::size_t>(std::min(chunkSizeBytes, imageSizeBytes)));
+
+    quint64 scanEndBytes = imageSizeBytes;
+
+    while (scanEndBytes > 0)
+    {
+        if (isCancelled())
+        {
+            return std::nullopt;
+        }
+
+        const quint64 chunkBytes = std::min(chunkSizeBytes, scanEndBytes);
+        const quint64 chunkStartBytes = scanEndBytes - chunkBytes;
+
+        if (!imageFile.seek(static_cast<qint64>(chunkStartBytes))
+            || imageFile.read(reinterpret_cast<char*>(buffer.data()), static_cast<qint64>(chunkBytes))
+                != static_cast<qint64>(chunkBytes))
+        {
+            qWarning() << "Trailing-zero scan of" << m_request.imageFilePath << "failed at offset"
+                       << chunkStartBytes << ':' << imageFile.errorString() << "- writing the whole image";
+            return std::nullopt;
+        }
+
+        for (quint64 index = chunkBytes; index > 0; --index)
+        {
+            if (buffer[index - 1] != 0)
+            {
+                return chunkStartBytes + index - 1;
+            }
+        }
+
+        scanEndBytes = chunkStartBytes;
+
+        reportProgress(ImagingStage::Analyzing, imageSizeBytes - scanEndBytes, imageSizeBytes, false);
+    }
+
+    return 0;
+}
+
+quint64 ImagingJob::findLastPartitionEndInImage(quint64 imageSizeBytes) const
+{
+    std::vector<std::uint8_t> head;
+    QString errorMessage;
+
+    // Every failure below returns the whole image, which disables skipping rather than risking it
+    // against a layout that could not be established.
+    if (!readImageHead(imageSizeBytes, head, errorMessage))
+    {
+        qWarning() << "Could not read the partition table of" << m_request.imageFilePath << ':'
+                   << errorMessage << "- writing the whole image";
+        return imageSizeBytes;
+    }
+
+    const PartitionTable table = parseImagePartitionTable(head, imageSizeBytes);
+    const PartitionEntry* const lastPartition = table.getLastPartition();
+
+    if (!lastPartition)
+    {
+        qInfo() << "No partition table in" << m_request.imageFilePath
+                << "- writing the whole image rather than guessing where its data ends";
+        return imageSizeBytes;
+    }
+
+    const quint64 lastPartitionEndBytes =
+        (lastPartition->firstSector + lastPartition->sectorCount) * table.getSectorSizeBytes();
+
+    return std::min(lastPartitionEndBytes, imageSizeBytes);
+}
+
+PartitionTable ImagingJob::parseImagePartitionTable(const std::vector<std::uint8_t>& head, quint64 imageSizeBytes) const
+{
+    for (const quint32 candidateSectorSizeBytes : CandidateSectorSizesBytes)
+    {
+        PartitionTable table = PartitionTable::parse(head, candidateSectorSizeBytes, imageSizeBytes);
+
+        if (table.getScheme() == PartitionScheme::Gpt)
+        {
+            return table;
+        }
+    }
+
+    return PartitionTable::parse(head, CandidateSectorSizesBytes.front(), imageSizeBytes);
+}
+
+bool ImagingJob::readImageHead(quint64 imageSizeBytes, std::vector<std::uint8_t>& head, QString& errorMessage) const
+{
+    QFile imageFile{ m_request.imageFilePath };
+
+    if (!imageFile.open(QIODevice::ReadOnly))
+    {
+        errorMessage = tr("Could not open “%1” for reading: %2")
+            .arg(m_request.imageFilePath, imageFile.errorString());
+        return false;
+    }
+
+    const quint64 scanSizeBytes = std::min(m_settings.partitionScanSizeBytes, imageSizeBytes);
+    head.assign(static_cast<std::size_t>(scanSizeBytes), std::uint8_t{ 0 });
+
+    if (imageFile.read(reinterpret_cast<char*>(head.data()), static_cast<qint64>(scanSizeBytes))
+        != static_cast<qint64>(scanSizeBytes))
+    {
+        errorMessage = tr("Could not read the partition table of “%1”: %2")
+            .arg(m_request.imageFilePath, imageFile.errorString());
+        return false;
+    }
+
+    return true;
+}
+
+bool ImagingJob::looksLikeExtFilesystem(quint64 partitionOffsetBytes, QString& errorMessage) const
+{
+    QFile imageFile{ m_request.imageFilePath };
+
+    if (!imageFile.open(QIODevice::ReadOnly)
+        || !imageFile.seek(static_cast<qint64>(partitionOffsetBytes + ExtSuperblockOffsetBytes + ExtMagicOffsetBytes)))
+    {
+        errorMessage = tr("Could not inspect the last partition of “%1”: %2")
+            .arg(m_request.imageFilePath, imageFile.errorString());
+        return false;
+    }
+
+    std::array<std::uint8_t, 2> magic{};
+
+    if (imageFile.read(reinterpret_cast<char*>(magic.data()), static_cast<qint64>(magic.size()))
+        != static_cast<qint64>(magic.size()))
+    {
+        errorMessage = tr("Could not inspect the last partition of “%1”: %2")
+            .arg(m_request.imageFilePath, imageFile.errorString());
+        return false;
+    }
+
+    if ((static_cast<quint16>(magic[0]) | (static_cast<quint16>(magic[1]) << 8)) != ExtMagicNumber)
+    {
+        errorMessage = tr("The last partition of “%1” does not look like an ext2/3/4 filesystem.")
+            .arg(m_request.imageFilePath);
+        return false;
+    }
+
+    return true;
+}
+
+bool ImagingJob::applyPartitionResizePlan(QFile& imageFile, const TrimPlan& plan, quint32 sectorSizeBytes) const
+{
+    if (plan.patchedFirstSector)
+    {
+        const auto& sector = *plan.patchedFirstSector;
+
+        if (!imageFile.seek(0)
+            || imageFile.write(reinterpret_cast<const char*>(sector.data()), static_cast<qint64>(sector.size()))
+                != static_cast<qint64>(sector.size()))
+        {
+            return false;
+        }
+    }
+
+    if (plan.gptTrailer)
+    {
+        const GptTrimTrailer& trailer = *plan.gptTrailer;
+        const qint64 headerOffset = static_cast<qint64>(trailer.primaryHeaderSectorIndex) * sectorSizeBytes;
+
+        if (!imageFile.seek(headerOffset)
+            || imageFile.write(reinterpret_cast<const char*>(trailer.primaryHeaderSector.data()),
+                   static_cast<qint64>(trailer.primaryHeaderSector.size()))
+                != static_cast<qint64>(trailer.primaryHeaderSector.size()))
+        {
+            return false;
+        }
+
+        const qint64 trailerOffset =
+            static_cast<qint64>(plan.imageSizeBytes) - static_cast<qint64>(trailer.trailerSectors.size());
+
+        if (!imageFile.seek(trailerOffset)
+            || imageFile.write(reinterpret_cast<const char*>(trailer.trailerSectors.data()),
+                   static_cast<qint64>(trailer.trailerSectors.size()))
+                != static_cast<qint64>(trailer.trailerSectors.size()))
+        {
+            return false;
+        }
+
+        if (trailer.patchedPrimaryEntryArray)
+        {
+            const auto& primaryEntryArray = *trailer.patchedPrimaryEntryArray;
+            const qint64 primaryEntryArrayOffset =
+                static_cast<qint64>(trailer.primaryEntryArrayFirstSector) * sectorSizeBytes;
+
+            if (!imageFile.seek(primaryEntryArrayOffset)
+                || imageFile.write(reinterpret_cast<const char*>(primaryEntryArray.data()),
+                       static_cast<qint64>(primaryEntryArray.size()))
+                    != static_cast<qint64>(primaryEntryArray.size()))
+            {
+                return false;
+            }
+        }
+    }
+
+    return imageFile.resize(static_cast<qint64>(plan.imageSizeBytes));
+}
+
+bool ImagingJob::computeFileDigests(QString& errorMessage)
+{
+    QFile imageFile{ m_request.imageFilePath };
+
+    if (!imageFile.open(QIODevice::ReadOnly))
+    {
+        errorMessage = tr("Could not reopen “%1” to recompute its digest: %2")
+            .arg(m_request.imageFilePath, imageFile.errorString());
+        return false;
+    }
+
+    const quint64 imageSizeBytes = static_cast<quint64>(imageFile.size());
+    const quint64 chunkSizeBytes = std::max<quint64>(m_settings.chunkSizeBytes, 1u);
+    std::vector<std::uint8_t> buffer(static_cast<std::size_t>(std::min(chunkSizeBytes, std::max<quint64>(imageSizeBytes, 1u))));
+
+    Hasher hasher{ m_request.computeSha256 };
+    quint64 offsetBytes = 0;
+
+    while (offsetBytes < imageSizeBytes)
+    {
+        const qint64 chunkBytes = static_cast<qint64>(std::min(chunkSizeBytes, imageSizeBytes - offsetBytes));
+
+        if (imageFile.read(reinterpret_cast<char*>(buffer.data()), chunkBytes) != chunkBytes)
+        {
+            errorMessage = tr("Could not reopen “%1” to recompute its digest: %2")
+                .arg(m_request.imageFilePath, imageFile.errorString());
+            return false;
+        }
+
+        hasher.update(buffer.data(), static_cast<std::size_t>(chunkBytes));
+        offsetBytes += static_cast<quint64>(chunkBytes);
+    }
+
+    m_fastDigestHex = hasher.getFastDigestHex();
+    m_sha256Hex = hasher.getSha256Hex();
+
+    return true;
+}
+
+bool ImagingJob::shrinkImageFilesystem(QString& errorMessage)
+{
+    const quint64 imageSizeBytes = static_cast<quint64>(QFileInfo{ m_request.imageFilePath }.size());
+
+    std::vector<std::uint8_t> head;
+
+    if (!readImageHead(imageSizeBytes, head, errorMessage))
+    {
+        return false;
+    }
+
+    const PartitionTable table = parseImagePartitionTable(head, imageSizeBytes);
+    const PartitionEntry* const lastPartition = table.getLastPartition();
+
+    if (table.getScheme() == PartitionScheme::None || !lastPartition)
+    {
+        errorMessage = tr("No partition table was found in the image, so there is no filesystem to shrink.");
+        return false;
+    }
+
+    const quint32 sectorSizeBytes = table.getSectorSizeBytes();
+    const quint64 partitionOffsetBytes = lastPartition->firstSector * sectorSizeBytes;
+
+    if (!looksLikeExtFilesystem(partitionOffsetBytes, errorMessage))
+    {
+        return false;
+    }
+
+    const auto shrinkResult = FilesystemResizer::shrinkFilesystem(m_request.imageFilePath,
+        lastPartition->firstSector, lastPartition->sectorCount, sectorSizeBytes, errorMessage);
+
+    if (!shrinkResult)
+    {
+        return false;
+    }
+
+    if (shrinkResult->newPartitionSectorCount >= lastPartition->sectorCount)
+    {
+        qInfo() << "resize2fs could not shrink the filesystem in" << m_request.imageFilePath << "any further";
+
+        // The e2fsck run inside shrinkFilesystem() may still have repaired the filesystem, so the digest
+        // taken during the read can describe a file that no longer exists on disk.
+        return computeFileDigests(errorMessage);
+    }
+
+    const auto plan = table.planShrinkLastPartition(shrinkResult->newPartitionSectorCount);
+
+    if (!plan)
+    {
+        errorMessage = tr("Could not rewrite the partition table for the shrunk filesystem.");
+        return false;
+    }
+
+    QFile imageFile{ m_request.imageFilePath };
+
+    if (!imageFile.open(QIODevice::ReadWrite) || !applyPartitionResizePlan(imageFile, *plan, sectorSizeBytes))
+    {
+        errorMessage = tr("Could not write the shrunk partition table to “%1”: %2")
+            .arg(m_request.imageFilePath, imageFile.errorString());
+        return false;
+    }
+
+    imageFile.close();
+
+    qInfo() << "Shrank the filesystem in" << m_request.imageFilePath << "to" << plan->imageSizeBytes << "bytes";
+
+    return computeFileDigests(errorMessage);
+}
+
+bool ImagingJob::growImageFilesystem(quint64 targetSizeBytes, QString& errorMessage)
+{
+    const quint64 imageSizeBytes = static_cast<quint64>(QFileInfo{ m_request.imageFilePath }.size());
+
+    std::vector<std::uint8_t> head;
+
+    if (!readImageHead(imageSizeBytes, head, errorMessage))
+    {
+        return false;
+    }
+
+    const PartitionTable table = parseImagePartitionTable(head, imageSizeBytes);
+    const PartitionEntry* const lastPartition = table.getLastPartition();
+
+    if (table.getScheme() == PartitionScheme::None || !lastPartition)
+    {
+        errorMessage = tr("No partition table was found in the image, so there is no filesystem to grow.");
+        return false;
+    }
+
+    const quint32 sectorSizeBytes = table.getSectorSizeBytes();
+    const quint64 partitionOffsetBytes = lastPartition->firstSector * sectorSizeBytes;
+
+    if (!looksLikeExtFilesystem(partitionOffsetBytes, errorMessage))
+    {
+        return false;
+    }
+
+    const auto plan = table.planGrowLastPartition(targetSizeBytes, m_settings.trimAlignmentBytes);
+
+    if (!plan)
+    {
+        qInfo() << "The image already fills the device - nothing to grow";
+        return true;
+    }
+
+    QFile imageFile{ m_request.imageFilePath };
+
+    if (!imageFile.open(QIODevice::ReadWrite)
+        || !imageFile.resize(static_cast<qint64>(plan->imageSizeBytes))
+        || !applyPartitionResizePlan(imageFile, *plan, sectorSizeBytes))
+    {
+        errorMessage = tr("Could not grow the partition table in “%1”: %2")
+            .arg(m_request.imageFilePath, imageFile.errorString());
+        return false;
+    }
+
+    imageFile.close();
+
+    const quint64 newPartitionSectorCount = plan->dataSizeBytes / sectorSizeBytes - lastPartition->firstSector;
+
+    if (!FilesystemResizer::growFilesystem(m_request.imageFilePath,
+            lastPartition->firstSector, newPartitionSectorCount, sectorSizeBytes, errorMessage))
+    {
+        return false;
+    }
+
+    qInfo() << "Grew the filesystem in" << m_request.imageFilePath << "to" << plan->imageSizeBytes << "bytes";
+
+    return true;
+}
+
 bool ImagingJob::compareDeviceWithImage(RawDevice& device,
     QIODevice& imageFile,
     quint64 sizeToCompare,
@@ -623,38 +1106,61 @@ void ImagingJob::reportProgress(ImagingStage stage, quint64 processedBytes, quin
         return;
     }
 
-    const qint64 intervalMilliseconds = nowMilliseconds - m_lastProgressReportMs;
-
-    if (intervalMilliseconds > 0 && processedBytes >= m_lastProgressProcessedBytes)
-    {
-        const double instantBytesPerSecond =
-            static_cast<double>(processedBytes - m_lastProgressProcessedBytes) * 1000.0
-            / static_cast<double>(intervalMilliseconds);
-
-        // A raw per-interval rate swings wildly with the device's own write caching, which makes the
-        // remaining-time estimate jump around; smoothing it keeps both readable.
-        m_smoothedBytesPerSecond = m_smoothedBytesPerSecond > 0.0
-            ? (1.0 - SpeedSmoothingFactor) * m_smoothedBytesPerSecond + SpeedSmoothingFactor * instantBytesPerSecond
-            : instantBytesPerSecond;
-    }
-
     m_lastProgressReportMs = nowMilliseconds;
-    m_lastProgressProcessedBytes = processedBytes;
+
+    updateSpeedEstimate(stage, processedBytes, nowMilliseconds);
 
     ImagingProgress progress;
     progress.stage = stage;
     progress.processedBytes = processedBytes;
     progress.totalBytes = totalBytes;
-    progress.bytesPerSecond = m_smoothedBytesPerSecond;
+    progress.bytesPerSecond = m_averageBytesPerSecond;
     progress.elapsedMilliseconds = nowMilliseconds;
-    progress.remainingMilliseconds = (m_smoothedBytesPerSecond > 1.0 && totalBytes > processedBytes)
-        ? static_cast<qint64>(static_cast<double>(totalBytes - processedBytes) / m_smoothedBytesPerSecond * 1000.0)
+    progress.remainingMilliseconds = (m_averageBytesPerSecond > 1.0 && totalBytes > processedBytes)
+        ? static_cast<qint64>(static_cast<double>(totalBytes - processedBytes) / m_averageBytesPerSecond * 1000.0)
         : -1;
 
     if (m_progressCallback)
     {
         m_progressCallback(progress);
     }
+}
+
+void ImagingJob::updateSpeedEstimate(ImagingStage stage, quint64 processedBytes, qint64 nowMilliseconds)
+{
+    // Every stage counts its own bytes from zero, so a window must never span two of them. The rate
+    // carried over from the previous stage stands until the new one has enough history of its own,
+    // which keeps the figure from dropping to zero for a moment at every stage boundary.
+    if (stage != m_speedSampleStage
+        || (!m_speedSamples.empty() && processedBytes < m_speedSamples.back().processedBytes))
+    {
+        m_speedSamples.clear();
+        m_speedSampleStage = stage;
+    }
+
+    m_speedSamples.push_back(SpeedSample{ nowMilliseconds, processedBytes });
+
+    const qint64 windowMilliseconds = std::max(m_settings.speedWindowMilliseconds, 1);
+
+    // Two samples are the fewest a rate can be derived from, so that many are kept however long the
+    // medium stalls — otherwise a stall longer than the window would leave nothing to divide by.
+    while (m_speedSamples.size() > 2
+        && nowMilliseconds - m_speedSamples.front().elapsedMilliseconds > windowMilliseconds)
+    {
+        m_speedSamples.pop_front();
+    }
+
+    const SpeedSample& oldest = m_speedSamples.front();
+    const qint64 spanMilliseconds = nowMilliseconds - oldest.elapsedMilliseconds;
+
+    // Too little history to divide by yet; whatever was last reported still stands.
+    if (spanMilliseconds < MinimumSpeedSpanMilliseconds)
+    {
+        return;
+    }
+
+    m_averageBytesPerSecond = static_cast<double>(processedBytes - oldest.processedBytes) * 1000.0
+        / static_cast<double>(spanMilliseconds);
 }
 
 ImagingResult ImagingJob::makeResult(ImagingStage stage, QString errorMessage) const

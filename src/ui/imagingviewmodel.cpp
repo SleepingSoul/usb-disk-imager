@@ -8,6 +8,7 @@
 #include <QFileInfo>
 #include <QUrl>
 
+#include <disk/filesystemresizer.hpp>
 #include <managers/imagingmanager.hpp>
 #include <ui/devicelistmodel.hpp>
 #include <utils/formatting.hpp>
@@ -47,6 +48,10 @@ QString sanitizeForFileName(const QString& text)
 
 ImagingViewModel::ImagingViewModel(DeviceListModel* deviceListModel)
     : m_deviceListModel(deviceListModel)
+    , m_shrinkSupported(FilesystemResizer::isSupported(FilesystemResizer::Operation::Shrink))
+    , m_shrinkUnsupportedReason(FilesystemResizer::getUnsupportedReason(FilesystemResizer::Operation::Shrink))
+    , m_growSupported(FilesystemResizer::isSupported(FilesystemResizer::Operation::Grow))
+    , m_growUnsupportedReason(FilesystemResizer::getUnsupportedReason(FilesystemResizer::Operation::Grow))
 {}
 
 void ImagingViewModel::resetToDefault()
@@ -56,6 +61,9 @@ void ImagingViewModel::resetToDefault()
     m_trimMode = QString{ trimModeToken(trimModeFromToken(storedTrimMode)) };
     m_verifyAfterWrite = UserSettings::getVerifyAfterWrite();
     m_computeSha256 = UserSettings::getComputeSha256();
+    m_skipTrailingZerosOnWrite = UserSettings::getSkipTrailingZerosOnWrite();
+    m_shrinkFilesystemAfterRead = m_shrinkSupported && UserSettings::getShrinkFilesystemAfterRead();
+    m_growFilesystemToFillDevice = m_growSupported && UserSettings::getGrowFilesystemToFillDevice();
 
     m_busy = false;
     m_cancelling = false;
@@ -156,6 +164,51 @@ void ImagingViewModel::setComputeSha256(bool computeSha256)
     Q_EMIT optionsChanged();
 }
 
+void ImagingViewModel::setSkipTrailingZerosOnWrite(bool skipTrailingZerosOnWrite)
+{
+    if (skipTrailingZerosOnWrite == m_skipTrailingZerosOnWrite)
+    {
+        return;
+    }
+
+    m_skipTrailingZerosOnWrite = skipTrailingZerosOnWrite;
+    UserSettings::setSkipTrailingZerosOnWrite(skipTrailingZerosOnWrite);
+
+    Q_EMIT optionsChanged();
+}
+
+void ImagingViewModel::setShrinkFilesystemAfterRead(bool shrinkFilesystemAfterRead)
+{
+    if (shrinkFilesystemAfterRead == m_shrinkFilesystemAfterRead)
+    {
+        return;
+    }
+
+    m_shrinkFilesystemAfterRead = shrinkFilesystemAfterRead;
+    UserSettings::setShrinkFilesystemAfterRead(shrinkFilesystemAfterRead);
+
+    Q_EMIT optionsChanged();
+}
+
+void ImagingViewModel::setGrowFilesystemToFillDevice(bool growFilesystemToFillDevice)
+{
+    if (growFilesystemToFillDevice == m_growFilesystemToFillDevice)
+    {
+        return;
+    }
+
+    m_growFilesystemToFillDevice = growFilesystemToFillDevice;
+    UserSettings::setGrowFilesystemToFillDevice(growFilesystemToFillDevice);
+
+    Q_EMIT optionsChanged();
+}
+
+bool ImagingViewModel::getCancellable() const
+{
+    return m_progress.stage != ImagingStage::ShrinkingFilesystem
+        && m_progress.stage != ImagingStage::GrowingFilesystem;
+}
+
 QString ImagingViewModel::getOperationToken() const
 {
     switch (m_operation)
@@ -197,6 +250,8 @@ QString ImagingViewModel::getStageText() const
     case ImagingStage::Transferring: return m_operation == ImagingOperation::Write ? tr("Writing") : tr("Reading");
     case ImagingStage::Verifying:    return tr("Verifying");
     case ImagingStage::Finalizing:   return tr("Flushing to the medium");
+    case ImagingStage::ShrinkingFilesystem: return tr("Shrinking the filesystem");
+    case ImagingStage::GrowingFilesystem:   return tr("Growing the filesystem");
     case ImagingStage::Complete:     return tr("Done");
     case ImagingStage::Failed:       return tr("Failed");
     case ImagingStage::Cancelled:    return tr("Cancelled");
@@ -330,6 +385,14 @@ void ImagingViewModel::cancel()
         return;
     }
 
+    // The button is disabled for these stages, but a click that lands as one begins would otherwise
+    // leave the UI showing "Cancelling…" for a run that is going to report success regardless.
+    if (!getCancellable())
+    {
+        qInfo() << "Ignoring a cancel request during a filesystem resize";
+        return;
+    }
+
     m_cancelling = true;
 
     Q_EMIT stateChanged();
@@ -439,6 +502,9 @@ void ImagingViewModel::startOperation(ImagingOperation operation)
     request.trimMode = trimModeFromToken(m_trimMode.toUtf8());
     request.verifyAfterWrite = m_verifyAfterWrite;
     request.computeSha256 = m_computeSha256;
+    request.skipTrailingZerosOnWrite = m_skipTrailingZerosOnWrite;
+    request.shrinkFilesystemAfterRead = m_shrinkSupported && m_shrinkFilesystemAfterRead;
+    request.growFilesystemToFillDevice = m_growSupported && m_growFilesystemToFillDevice;
 
     m_hasResult = false;
     m_result = ImagingResult{};

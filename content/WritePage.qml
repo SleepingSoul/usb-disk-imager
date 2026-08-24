@@ -93,6 +93,32 @@ ScrollView {
 
         Card {
             Layout.fillWidth: true
+            title: qsTr("How much to write")
+            iconPath: Icons.trim
+
+            AppCheckBox {
+                Layout.fillWidth: true
+                enabled: !Imager.busy
+                text: qsTr("Skip trailing zeros in the image")
+                description: qsTr("Stops once only zeros remain and leaves the rest of the device untouched — faster, but anything left over from the device's previous contents stays there.")
+                checked: Imager.skipTrailingZerosOnWrite
+                onToggled: Imager.skipTrailingZerosOnWrite = checked
+            }
+
+            AppCheckBox {
+                Layout.fillWidth: true
+                enabled: !Imager.busy && Imager.growSupported
+                text: qsTr("Grow the filesystem to fill the device")
+                description: Imager.growSupported
+                    ? qsTr("Grows the last partition's ext2/3/4 filesystem before writing, so the card is fully usable right away instead of waiting for a first-boot resize.")
+                    : Imager.growUnsupportedReason
+                checked: Imager.growFilesystemToFillDevice
+                onToggled: Imager.growFilesystemToFillDevice = checked
+            }
+        }
+
+        Card {
+            Layout.fillWidth: true
             title: qsTr("After writing")
             iconPath: Icons.verify
 
@@ -128,11 +154,6 @@ ScrollView {
                 enabled: root.canWrite
                 onClicked: confirmDialog.open()
             }
-        }
-
-        ProgressPanel {
-            Layout.fillWidth: true
-            visible: Imager.busy && root.activeHere
         }
 
         ResultPanel {

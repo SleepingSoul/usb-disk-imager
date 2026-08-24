@@ -13,6 +13,9 @@ const QLatin1StringView IncludeFixedDisksKey{ "devices/includeFixedDisks" };
 const QLatin1StringView TrimModeKey{ "imaging/trimMode" };
 const QLatin1StringView VerifyAfterWriteKey{ "imaging/verifyAfterWrite" };
 const QLatin1StringView ComputeSha256Key{ "imaging/computeSha256" };
+const QLatin1StringView SkipTrailingZerosOnWriteKey{ "imaging/skipTrailingZerosOnWrite" };
+const QLatin1StringView ShrinkFilesystemAfterReadKey{ "imaging/shrinkFilesystemAfterRead" };
+const QLatin1StringView GrowFilesystemToFillDeviceKey{ "imaging/growFilesystemToFillDevice" };
 const QLatin1StringView LastImageDirectoryKey{ "imaging/lastImageDirectory" };
 
 /*
@@ -77,6 +80,36 @@ bool UserSettings::getComputeSha256()
 void UserSettings::setComputeSha256(bool computeSha256)
 {
     openSettings().setValue(ComputeSha256Key, computeSha256);
+}
+
+bool UserSettings::getSkipTrailingZerosOnWrite()
+{
+    return openSettings().value(SkipTrailingZerosOnWriteKey, false).toBool();
+}
+
+void UserSettings::setSkipTrailingZerosOnWrite(bool skipTrailingZerosOnWrite)
+{
+    openSettings().setValue(SkipTrailingZerosOnWriteKey, skipTrailingZerosOnWrite);
+}
+
+bool UserSettings::getShrinkFilesystemAfterRead()
+{
+    return openSettings().value(ShrinkFilesystemAfterReadKey, false).toBool();
+}
+
+void UserSettings::setShrinkFilesystemAfterRead(bool shrinkFilesystemAfterRead)
+{
+    openSettings().setValue(ShrinkFilesystemAfterReadKey, shrinkFilesystemAfterRead);
+}
+
+bool UserSettings::getGrowFilesystemToFillDevice()
+{
+    return openSettings().value(GrowFilesystemToFillDeviceKey, false).toBool();
+}
+
+void UserSettings::setGrowFilesystemToFillDevice(bool growFilesystemToFillDevice)
+{
+    openSettings().setValue(GrowFilesystemToFillDeviceKey, growFilesystemToFillDevice);
 }
 
 QString UserSettings::getLastImageDirectory()
