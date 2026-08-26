@@ -14,9 +14,8 @@ namespace UDI
  * block device once polkit has authorised it.
  *
  * This is what lets the app image a card without being root: a desktop user answers a polkit prompt
- * instead of restarting the whole GUI under sudo. It is also the only route that works inside a strictly
- * confined snap, where /dev/sdX cannot be opened directly and pkexec is unavailable — the same design
- * Raspberry Pi Imager's snap uses.
+ * instead of restarting the whole GUI under sudo. It is the same route Raspberry Pi Imager takes, and the
+ * only one available wherever /dev/sdX cannot be opened directly and pkexec is unavailable.
  */
 namespace UDisks2
 {
