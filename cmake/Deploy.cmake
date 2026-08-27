@@ -25,14 +25,20 @@ else()
         DESTINATION ${CMAKE_INSTALL_SYSCONFDIR}/udev/rules.d)
 endif()
 
-# windeployqt / macdeployqt. A harmless no-op elsewhere.
-qt_generate_deploy_qml_app_script(
-    TARGET ${PROJECT_NAME}
-    OUTPUT_SCRIPT UDI_DEPLOY_SCRIPT
-    MACOS_BUNDLE_POST_BUILD
-    NO_UNSUPPORTED_PLATFORM_ERROR
-)
-install(SCRIPT ${UDI_DEPLOY_SCRIPT})
+# windeployqt / macdeployqt, and on Linux a copy of the Qt runtime beside the binary. That is what a
+# self-contained tarball wants and exactly what a distro package does not: there Qt arrives from the
+# platform, and a second copy would both bloat the package and shadow it.
+option(UDI_DEPLOY_QT_RUNTIME "Install a private copy of the Qt runtime next to the executable" ON)
+
+if (UDI_DEPLOY_QT_RUNTIME)
+    qt_generate_deploy_qml_app_script(
+        TARGET ${PROJECT_NAME}
+        OUTPUT_SCRIPT UDI_DEPLOY_SCRIPT
+        MACOS_BUNDLE_POST_BUILD
+        NO_UNSUPPORTED_PLATFORM_ERROR
+    )
+    install(SCRIPT ${UDI_DEPLOY_SCRIPT})
+endif()
 
 set(CPACK_PACKAGE_NAME "${UDI_APP_ID}")
 set(CPACK_PACKAGE_VENDOR "${UDI_AUTHOR}")

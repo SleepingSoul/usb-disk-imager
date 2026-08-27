@@ -2,8 +2,8 @@ pragma Singleton
 import QtQuick
 
 // Design-time stand-in for UDI::AppViewModel, which UiManager registers into this module at startup.
-// Same properties and methods, plausible values, no behaviour. Set elevated to false to bring up the
-// rights banner ElevationAlert.qml draws.
+// Same properties and methods, plausible values, no behaviour. Set deviceAccessAvailable to false to
+// bring up the rights banner ElevationAlert.qml draws.
 QtObject {
     readonly property string applicationName: "USB Disk Imager"
     readonly property string version: "1.0.0"
@@ -43,6 +43,7 @@ QtObject {
     ]
 
     readonly property bool elevated: true
+    readonly property bool deviceAccessAvailable: true
     readonly property bool canElevate: true
     readonly property string elevationHint: "Restart the app as administrator, or start it from an elevated terminal."
 

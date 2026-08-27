@@ -9,6 +9,7 @@
 #include <QUrl>
 
 #include <disk/filesystemresizer.hpp>
+#include <disk/rawdevice.hpp>
 #include <managers/imagingmanager.hpp>
 #include <ui/devicelistmodel.hpp>
 #include <utils/formatting.hpp>
@@ -489,7 +490,9 @@ void ImagingViewModel::startOperation(ImagingOperation operation)
         return;
     }
 
-    if (!Privileges::isElevated())
+    // Elevation is one way in; a broker that opens the device for us is another, and on a desktop with
+    // udisks2 that is the normal one.
+    if (!Privileges::isElevated() && !RawDevice::canOpenWithoutElevation())
     {
         reportRefusal(operation, Privileges::getElevationHint());
         return;

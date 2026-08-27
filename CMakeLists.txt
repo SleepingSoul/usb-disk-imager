@@ -47,6 +47,11 @@ find_package(Qt6 ${UDI_QT_MINIMUM_VERSION} REQUIRED COMPONENTS
     LinguistTools
 )
 
+# Only Linux talks to udisks2, and it is the sole reason this module is needed.
+if (UNIX AND NOT APPLE)
+    find_package(Qt6 ${UDI_QT_MINIMUM_VERSION} REQUIRED COMPONENTS DBus)
+endif()
+
 message(STATUS "Using Qt ${Qt6_VERSION} from ${Qt6_DIR} (${UDI_QT_MINIMUM_VERSION} or newer required)")
 
 include(cmake/Dependencies.cmake)
@@ -143,9 +148,13 @@ elseif (UNIX)
     list(APPEND PROJECT_SOURCES
         src/disk/linux/deviceenumerator.cpp
         src/disk/linux/filesystemresizer.cpp
+        src/disk/linux/udisks2.cpp
         src/disk/linux/volumecontrol.cpp
         src/disk/unix/rawdevice.cpp
         src/utils/unix/privileges.cpp
+    )
+    list(APPEND PROJECT_HEADERS
+        src/disk/linux/udisks2.hpp
     )
 else()
     message(FATAL_ERROR "Unsupported platform: ${CMAKE_SYSTEM_NAME}")
@@ -205,6 +214,8 @@ elseif (APPLE)
         "-framework IOKit"
         "-framework CoreFoundation"
     )
+elseif (UNIX)
+    target_link_libraries(${PROJECT_NAME} PRIVATE Qt6::DBus)
 endif()
 
 if (MSVC)

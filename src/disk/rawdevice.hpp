@@ -48,6 +48,11 @@ public:
     // the caller to hold a VolumeControl lock on the device already.
     static std::unique_ptr<RawDevice> open(const DeviceInfo& device, AccessMode mode, QString& errorMessage);
 
+    // True when a device can be opened without the process being elevated — on Linux, when udisks2 is
+    // there to open it on the app's behalf after a polkit prompt. The UI asks this before telling anyone
+    // to restart with more rights, since on such a system there is nothing to restart for.
+    static bool canOpenWithoutElevation();
+
     // Offsets and sizes must be multiples of getSectorSizeBytes(); the imaging job pads its last chunk
     // to satisfy that.
     virtual qint64 read(std::uint8_t* data, qint64 sizeBytes) = 0;

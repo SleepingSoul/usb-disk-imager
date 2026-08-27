@@ -9,7 +9,7 @@ ScrollView {
 
     readonly property bool activeHere: Imager.operation === "write"
     readonly property bool canWrite: !Imager.busy
-        && App.elevated
+        && App.deviceAccessAvailable
         && Devices.hasSelection
         && !Devices.selectedIsSystemDevice
         && !Devices.selectedIsWriteProtected

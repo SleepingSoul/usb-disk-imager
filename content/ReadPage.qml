@@ -9,7 +9,7 @@ ScrollView {
 
     readonly property bool activeHere: Imager.operation === "read"
     readonly property bool canRead: !Imager.busy
-        && App.elevated
+        && App.deviceAccessAvailable
         && Devices.hasSelection
         && Imager.imageFilePath !== ""
 

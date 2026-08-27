@@ -40,6 +40,7 @@ bool DeviceInfo::operator==(const DeviceInfo& other) const
         && model == other.model
         && mountPoints == other.mountPoints
         && volumeLabels == other.volumeLabels
+        && mountedDevicePaths == other.mountedDevicePaths
         && sizeBytes == other.sizeBytes
         && logicalSectorSizeBytes == other.logicalSectorSizeBytes
         && bus == other.bus

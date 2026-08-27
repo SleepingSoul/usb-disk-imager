@@ -293,6 +293,7 @@ DeviceEnumerator::Result DeviceEnumerator::enumerate(bool includeFixedDisks)
 
             device.mountPoints.push_back(mountEntry.mountPoint);
             device.volumeLabels.push_back(QString{});
+            device.mountedDevicePaths.push_back(mountEntry.devicePath);
 
             const bool isSystemMountPoint = std::any_of(SystemMountPoints.cbegin(), SystemMountPoints.cend(),
                 [&mountEntry](QLatin1StringView systemMountPoint)

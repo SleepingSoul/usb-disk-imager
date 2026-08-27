@@ -30,6 +30,7 @@ class AppViewModel : public IViewModel
     Q_PROPERTY(QVariantList thirdPartyComponents READ getThirdPartyComponents NOTIFY languageChanged FINAL)
 
     Q_PROPERTY(bool elevated READ getElevated CONSTANT FINAL)
+    Q_PROPERTY(bool deviceAccessAvailable READ getDeviceAccessAvailable CONSTANT FINAL)
     Q_PROPERTY(bool canElevate READ getCanElevate CONSTANT FINAL)
     Q_PROPERTY(QString elevationHint READ getElevationHint NOTIFY languageChanged FINAL)
 
@@ -59,6 +60,10 @@ public:
     QVariantList getThirdPartyComponents() const;
 
     bool getElevated() const;
+    // Whether a transfer can start at all: either this process is elevated, or the platform can open a
+    // device on its behalf. The pages gate on this rather than on elevation, since a desktop with
+    // udisks2 needs no elevation and has nothing to restart for.
+    bool getDeviceAccessAvailable() const;
     bool getCanElevate() const;
     QString getElevationHint() const;
 
